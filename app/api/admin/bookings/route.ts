@@ -65,7 +65,7 @@ export async function POST(request: Request): Promise<Response> {
       status: body.status,
       denialReason: body.status === "DENIED" ? body.denialReason : null,
       paymentReference: body.paymentReference ?? null,
-      expiresAt: body.expiresAt ? new Date(body.expiresAt) : new Date(Date.now() + 15 * 60_000),
+      expiresAt: body.expiresAt ? new Date(body.expiresAt) : new Date(Date.now() + 5 * 60 * 60 * 1000),
     });
 
     const populated = await booking.populate("customer");

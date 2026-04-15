@@ -300,10 +300,21 @@ export default function AdminPage() {
     setError(null);
 
     try {
-      await api<AdminUser>("/api/admin/login", {
+      const response = await fetch("/api/admin/login", {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(loginForm),
       });
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        throw new Error(body?.error?.message || "Login failed");
+      }
+      const body = await response.json();
+      const redirectUrl = body?.data?.redirectUrl;
+      if (redirectUrl && redirectUrl !== "/admin") {
+        window.location.replace(redirectUrl);
+        return;
+      }
       await checkSession();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");

@@ -31,12 +31,21 @@ export async function POST(request: Request): Promise<Response> {
 
     await createAdminSession(String(user._id), user.role as "ADMIN" | "RECEPTIONIST");
 
+    // Determine redirect URL based on role
+    let redirectUrl = "/";
+    if (user.role === "ADMIN") {
+      redirectUrl = "/admin";
+    } else if (user.role === "RECEPTIONIST") {
+      redirectUrl = "/receptionist";
+    }
+
     return Response.json({
       data: {
         id: String(user._id),
         username: user.username,
         name: user.name,
         role: user.role,
+        redirectUrl,
       },
     });
   } catch (error) {
