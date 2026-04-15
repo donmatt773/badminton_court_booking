@@ -1,36 +1,68 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Court Booking (Single Dev Server)
 
-## Getting Started
+Backend is merged into this Next.js app under `lib/server/graphql` and runs with one command.
 
-First, run the development server:
+## Run
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+App: `http://localhost:3000`
+GraphQL: `http://localhost:3000/api/graphql`
+Admin: `http://localhost:3000/admin`
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Environment
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Create local env file:
 
-## Learn More
+```bash
+cp .env.example .env.local
+```
 
-To learn more about Next.js, take a look at the following resources:
+Required backend vars:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- `MONGODB_URI`
+- `ADMIN_KEY`
+- `PENDING_EXPIRY_MINUTES`
+- `RATE_LIMIT_PER_MINUTE`
+- `DUPLICATE_WINDOW_MINUTES`
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Backend Features
 
-## Deploy on Vercel
+- Separate customer table (`name`, `contactNumber`, `email`) with no password/login/JWT.
+- Booking lifecycle: `PENDING`, `CONTACTED`, `CONFIRMED`, `PAID`, `APPROVED`, `EXPIRED`, `CANCELLED`.
+- Slot conflict prevention and duplicate booking guards.
+- Abuse logging (`RATE_LIMIT`, `DUPLICATE_BOOKING`, `SLOT_TAKEN`, `SUSPICIOUS_ACTIVITY`).
+- Admin-key protection for privileged operations via `x-admin-key` header.
+- Auto-expiry cron job for stale `PENDING` bookings.
+- Real-time subscription events through GraphQL Yoga subscriptions.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Admin Dashboard
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- URL: `http://localhost:3000/admin`
+- Default seeded admin credentials:
+	- username: `admin`
+	- password: `admin`
+
+The default admin user is auto-created at startup if it does not already exist.
+
+## GraphQL Operations
+
+Queries:
+
+- `bookings(bookingDate, courtId)`
+- `abuseLogs(limit)` (admin key required)
+
+Mutations:
+
+- `createBooking(input)` (public)
+- `updateBookingStatus(bookingId, status)` (admin key required)
+- `recordPaymentReference(bookingId, paymentReference)` (admin key required)
+
+Subscriptions:
+
+- `bookingCreated`
+- `bookingUpdated`
+- `abuseEvent` (admin key required)
