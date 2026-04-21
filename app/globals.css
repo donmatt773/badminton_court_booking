@@ -3,20 +3,24 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
-}
+  color-scheme: light;
 
-@theme inline {
+  /* ── Booking design tokens ── */
+  --color-background-primary:   #ffffff;
+  --color-background-secondary: #f0faf6;
+  --color-background-tertiary:  #edf7f2;
+  --color-text-primary:         #0d2418;
+  --color-text-secondary:       #3b6b53;
+  --color-border-secondary:     #afd1c2;
+  --color-border-tertiary:      #d2ece3;
+  --color-background-danger:    #fef2f2;
+  --color-text-danger:          #b91c1c;
+  --border-radius-md:           8px;
+  --border-radius-lg:           14px;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
 }
 
 body {

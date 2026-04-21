@@ -29,6 +29,15 @@ Required backend vars:
 - `RATE_LIMIT_PER_MINUTE`
 - `DUPLICATE_WINDOW_MINUTES`
 
+Optional realtime vars for Pusher:
+
+- `PUSHER_APP_ID`
+- `NEXT_PUBLIC_PUSHER_KEY`
+- `PUSHER_SECRET`
+- `NEXT_PUBLIC_PUSHER_CLUSTER`
+
+If the Pusher vars are not set, Apollo still works and the app falls back to normal request/refresh behavior without realtime pushes.
+
 ## Backend Features
 
 - Separate customer table (`name`, `contactNumber`, `email`) with no password/login/JWT.
@@ -37,7 +46,8 @@ Required backend vars:
 - Abuse logging (`RATE_LIMIT`, `DUPLICATE_BOOKING`, `SLOT_TAKEN`, `SUSPICIOUS_ACTIVITY`).
 - Admin-key protection for privileged operations via `x-admin-key` header.
 - Auto-expiry cron job for stale `PENDING` bookings.
-- Real-time subscription events through GraphQL Yoga subscriptions.
+- Apollo Client for customer GraphQL pages.
+- Realtime invalidation through Pusher channels for booking and blocked-slot updates.
 
 ## Admin Dashboard
 
@@ -61,8 +71,7 @@ Mutations:
 - `updateBookingStatus(bookingId, status)` (admin key required)
 - `recordPaymentReference(bookingId, paymentReference)` (admin key required)
 
-Subscriptions:
+Realtime channels:
 
-- `bookingCreated`
-- `bookingUpdated`
-- `abuseEvent` (admin key required)
+- `court-bookings`
+- `court-blocked-slots`

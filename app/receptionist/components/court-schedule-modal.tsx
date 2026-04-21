@@ -1,4 +1,6 @@
 import React, { FC, useState } from "react";
+import { getPusherClient } from "@/lib/client/pusher-client";
+import { REALTIME_CHANNELS, REALTIME_EVENTS } from "@/lib/shared/realtime-events";
 
 interface Booking {
   _id: string;
@@ -6,6 +8,7 @@ interface Booking {
   startTime: string;
   endTime: string;
   status: string;
+  courtId: string;
   customer: { name: string } | string;
 }
 
@@ -29,17 +32,55 @@ export const CourtScheduleModal: FC<CourtScheduleModalProps> = ({ courtId, court
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  React.useEffect(() => {
-    if (!open) return;
+  async function loadBookings(): Promise<void> {
+    if (!open) {
+      return;
+    }
+
     setLoading(true);
-    fetch("/api/admin/bookings")
-      .then((res) => res.json())
-      .then((data) => {
-        const filtered = (data.data || []).filter((b: any) => b.courtId === courtId);
-        setBookings(filtered);
-      })
-      .catch((err) => setError(err.message))
-      .finally(() => setLoading(false));
+
+    try {
+      setError(null);
+      const res = await fetch("/api/admin/bookings");
+      if (!res.ok) {
+        throw new Error("Failed to fetch bookings");
+      }
+
+      const data = (await res.json()) as { data?: Booking[] };
+      const filtered = (data.data || []).filter((booking) => booking.courtId === courtId);
+      setBookings(filtered);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to fetch bookings");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  React.useEffect(() => {
+    void loadBookings();
+  }, [open, courtId]);
+
+  React.useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    const pusher = getPusherClient();
+    if (!pusher) {
+      return;
+    }
+
+    const channel = pusher.subscribe(REALTIME_CHANNELS.bookings);
+    const handleUpdate = () => {
+      void loadBookings();
+    };
+
+    channel.bind(REALTIME_EVENTS.updated, handleUpdate);
+
+    return () => {
+      channel.unbind(REALTIME_EVENTS.updated, handleUpdate);
+      pusher.unsubscribe(REALTIME_CHANNELS.bookings);
+    };
   }, [open, courtId]);
 
   if (!open) return null;

@@ -22,8 +22,15 @@ export async function GET(): Promise<Response> {
 
     const customers = await CustomerModel.find({}).sort({ createdAt: -1 }).limit(300);
     return Response.json({ data: customers });
-  } catch {
-    return Response.json({ error: { message: "Unauthorized" } }, { status: 401 });
+  } catch (error) {
+    if (error instanceof Error && error.message === "Unauthorized") {
+      return Response.json({ error: { message: "Unauthorized" } }, { status: 401 });
+    }
+
+    return Response.json(
+      { error: { message: getFriendlyErrorMessage(error, "Failed to fetch customers") } },
+      { status: 500 }
+    );
   }
 }
 

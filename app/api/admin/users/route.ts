@@ -29,8 +29,15 @@ export async function GET(): Promise<Response> {
 
     const users = await UserModel.find({}).sort({ createdAt: -1 }).select("-passwordHash");
     return Response.json({ data: users });
-  } catch {
-    return Response.json({ error: { message: "Unauthorized" } }, { status: 401 });
+  } catch (error) {
+    if (error instanceof Error && error.message === "Unauthorized") {
+      return Response.json({ error: { message: "Unauthorized" } }, { status: 401 });
+    }
+
+    return Response.json(
+      { error: { message: getFriendlyErrorMessage(error, "Failed to fetch users") } },
+      { status: 500 }
+    );
   }
 }
 

@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import styles from "./admin.module.css";
 
 type AdminUser = {
   id: string;
@@ -99,6 +98,109 @@ type DeleteModalState = {
   endpoint: string;
   errorMessage: string;
 };
+
+const styles = {
+  // Layout
+  shell:
+    "grid min-h-screen grid-cols-1 bg-[#f2f6f4] text-[#0d2418] lg:grid-cols-[260px_1fr]",
+
+  // Sidebar — deep forest green
+  sidebar:
+    "flex flex-row flex-wrap items-center gap-1 border-b border-white/10 bg-[#0d2418] p-3 lg:flex-col lg:items-stretch lg:gap-0.5 lg:border-b-0 lg:border-r lg:border-white/10 lg:p-4",
+  brand:
+    "flex w-full items-center gap-2 rounded-xl px-3 py-3 text-[16px] font-bold text-white",
+  userMeta:
+    "mb-2 rounded-lg border border-[#1D9E75]/25 bg-[#1D9E75]/10 px-3 py-2 text-xs text-[#5aad8c]",
+  navButton:
+    "flex w-full items-center gap-2.5 rounded-lg border border-transparent bg-transparent px-3 py-2.5 text-left text-[13px] font-medium text-[#7ab89a] transition-all hover:bg-white/[0.08] hover:text-white",
+  navButtonActive:
+    "border-[#17876a] bg-[#1D9E75] text-white hover:bg-[#17876a] hover:text-white",
+  navBadge:
+    "ml-auto min-w-[20px] rounded-full bg-white/15 px-1.5 py-0.5 text-center text-[10px] font-bold tabular-nums",
+  navDivider: "my-2 border-t border-white/10",
+
+  // Main content
+  main: "min-w-0",
+  header:
+    "flex h-16 items-center justify-between border-b border-[#e2ede8] bg-white px-6 shadow-sm",
+  headerLeft: "flex flex-col gap-0.5",
+  headerTitle: "text-[15px] font-bold text-[#0d2418]",
+  headerSub: "text-[11px] text-[#7aab93] capitalize",
+  headerActions: "flex flex-wrap gap-2",
+  content: "p-6",
+
+  // Panel / Card
+  panel: "mb-5 overflow-hidden rounded-2xl border border-[#e2ede8] bg-white shadow-sm",
+  panelHeader:
+    "flex items-center justify-between border-b border-[#edf7f2] bg-gradient-to-r from-[#f9fbfa] to-[#f4f9f7] px-5 py-4",
+  panelBody: "p-5",
+  sectionTitle: "text-[15px] font-bold text-[#0d2418]",
+  sectionCount:
+    "ml-2 inline-flex items-center rounded-full bg-[#1D9E75]/[0.12] px-2 py-0.5 text-[11px] font-semibold text-[#1D9E75]",
+
+  // Add-new form section inside panel
+  addFormSection: "mb-5 rounded-xl border border-[#e2ede8] bg-[#f9fbfa] p-4",
+  addFormTitle:
+    "mb-3 text-[11px] font-bold uppercase tracking-widest text-[#6b9e84]",
+  gridForm: "grid gap-2",
+
+  // Inputs
+  input:
+    "w-full rounded-lg border border-[#d1e0d8] bg-white px-3 py-2.5 text-[13px] text-[#0d2418] outline-none transition placeholder:text-[#9ab5a8] focus:border-[#1D9E75] focus:ring-2 focus:ring-[#1D9E75]/20",
+  select:
+    "w-full rounded-lg border border-[#d1e0d8] bg-white px-3 py-2.5 text-[13px] text-[#0d2418] outline-none transition focus:border-[#1D9E75] focus:ring-2 focus:ring-[#1D9E75]/20",
+
+  // Buttons
+  btn:
+    "inline-flex items-center justify-center rounded-lg border px-3.5 py-2 text-xs font-semibold transition-all disabled:cursor-not-allowed disabled:opacity-50",
+  btnPrimary: "border-[#1D9E75] bg-[#1D9E75] text-white hover:bg-[#17876a]",
+  btnDark:
+    "border-[#d1e0d8] bg-white text-[#3b6b53] hover:bg-[#f4f7f6] hover:border-[#afd1c2]",
+  btnInfo:
+    "border-[#c8e2d6] bg-[#edf7f2] text-[#1D9E75] hover:bg-[#ddf0e8]",
+  btnDanger:
+    "border-[#fecaca] bg-[#fef2f2] text-[#dc2626] hover:bg-[#fee2e2]",
+
+  // Table — uses Tailwind arbitrary child selectors for th/td
+  tableWrap: "overflow-x-auto",
+  table:
+    "w-full min-w-[700px] border-collapse text-[13px] [&_thead]:bg-[#f4f7f6] [&_th]:border-b [&_th]:border-[#e2ede8] [&_th]:px-4 [&_th]:py-3 [&_th]:text-left [&_th]:text-[11px] [&_th]:font-semibold [&_th]:uppercase [&_th]:tracking-wide [&_th]:text-[#6b9e84] [&_td]:border-b [&_td]:border-[#f0f5f2] [&_td]:px-4 [&_td]:py-3.5 [&_td]:whitespace-nowrap [&_tbody_tr:last-child_td]:border-b-0 [&_tbody_tr]:transition-colors [&_tbody_tr:hover]:bg-[#f9fbfa]",
+  rowActions: "flex gap-1.5",
+
+  // Status badges
+  status:
+    "inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold",
+  statusPending: "bg-amber-50 text-amber-700 ring-1 ring-amber-200/80",
+  statusApproved: "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200/80",
+  statusCancelled: "bg-red-50 text-red-600 ring-1 ring-red-200/80",
+  statusInfo: "bg-[#edf7f2] text-[#3b6b53] ring-1 ring-[#c8e2d6]",
+
+  // Alert
+  alertError:
+    "mb-4 flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-[13px] text-red-700",
+
+  // Login
+  loginShell: "grid min-h-screen place-items-center p-4",
+  loginCard:
+    "flex w-full max-w-[400px] flex-col items-center gap-4 rounded-2xl border border-[#e2ede8] bg-white px-8 py-10 shadow-xl",
+  loginTitle: "m-0 text-center text-[22px] font-bold text-[#0d2418]",
+  loginSub: "-mt-2 text-center text-[13px] text-[#7aab93]",
+  loginInput: "w-full",
+  loginSubmit: "mt-1 w-full py-2.5",
+  loginBackWrap: "flex w-full justify-center",
+  loginError: "w-full",
+
+  // Modal
+  modalOverlay:
+    "fixed inset-0 z-[200] grid place-items-center bg-black/40 p-4 backdrop-blur-sm",
+  modalCard:
+    "w-full max-w-[540px] rounded-2xl border border-[#e2ede8] bg-white p-6 shadow-2xl",
+  modalHeader: "mb-4 text-base font-bold capitalize text-[#0d2418]",
+  modalActions: "mt-5 flex justify-end gap-2",
+  deleteWarningText:
+    "mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-[13px] leading-relaxed text-red-700",
+  fieldErrorText: "-mt-1 mb-1 text-xs text-red-500",
+} as const;
 
 function statusClassName(status: string): string {
   const normalized = status.toUpperCase();
@@ -247,6 +349,10 @@ export default function AdminPage() {
   async function checkSession(): Promise<void> {
     try {
       const user = await api<AdminUser>("/api/admin/me");
+      if (user.role === "RECEPTIONIST") {
+        window.location.replace("/receptionist");
+        return;
+      }
       setCurrentUser(user);
     } catch {
       setCurrentUser(null);
@@ -482,9 +588,15 @@ export default function AdminPage() {
 
   if (!currentUser) {
     return (
-      <main className={styles.loginShell}>
+      <main
+        className={styles.loginShell}
+        style={{
+          background: "linear-gradient(135deg, #0d2418 0%, #1a3c2d 50%, #0d2418 100%)",
+        }}
+      >
         <form onSubmit={handleLogin} className={styles.loginCard} autoComplete="off">
-          <h1 className={styles.loginTitle}>Admin Login</h1>
+          <h1 className={styles.loginTitle}>🏸 Admin Dashboard</h1>
+          <p className={styles.loginSub}>Sign in to manage your courts</p>
           <input
             type="text"
             name="username"
@@ -550,45 +662,53 @@ export default function AdminPage() {
   return (
     <main className={styles.shell}>
       <aside className={styles.sidebar}>
-        <div className={styles.brand}>Badminton Admin</div>
+        <div className={styles.brand}>🏸 Admin Dashboard</div>
         <div className={styles.userMeta}>
-          {currentUser.username} ({currentUser.role})
+          {currentUser.username} · {currentUser.role}
         </div>
         <button
           className={`${styles.navButton} ${activeTab === "bookings" ? styles.navButtonActive : ""}`}
           onClick={() => setActiveTab("bookings")}
         >
-          Bookings
+          📋 Bookings
+          <span className={styles.navBadge}>{bookings.length}</span>
         </button>
         <button
           className={`${styles.navButton} ${activeTab === "customers" ? styles.navButtonActive : ""}`}
           onClick={() => setActiveTab("customers")}
         >
-          Customers
+          👥 Customers
+          <span className={styles.navBadge}>{customers.length}</span>
         </button>
         <button
           className={`${styles.navButton} ${activeTab === "courts" ? styles.navButtonActive : ""}`}
           onClick={() => setActiveTab("courts")}
         >
-          Courts
+          🏸 Courts
+          <span className={styles.navBadge}>{courts.length}</span>
         </button>
         <button
           className={`${styles.navButton} ${activeTab === "users" ? styles.navButtonActive : ""}`}
           onClick={() => setActiveTab("users")}
         >
-          Users
+          👤 Users
+          <span className={styles.navBadge}>{users.length}</span>
         </button>
         <button
           className={`${styles.navButton} ${activeTab === "abuse" ? styles.navButtonActive : ""}`}
           onClick={() => setActiveTab("abuse")}
         >
-          Abuse Logs
+          ⚠️ Abuse Logs
+          <span className={styles.navBadge}>{abuseLogs.length}</span>
         </button>
       </aside>
 
       <section className={styles.main}>
         <header className={styles.header}>
-          <div className={styles.headerTitle}>Admin Only Dashboard</div>
+          <div className={styles.headerLeft}>
+            <div className={styles.headerTitle}>Admin Dashboard</div>
+            <div className={styles.headerSub}>{activeTab}</div>
+          </div>
           <div className={styles.headerActions}>
             <button
               type="button"
@@ -618,13 +738,18 @@ export default function AdminPage() {
 
           {activeTab === "customers" && (
             <section className={styles.panel}>
-              <h2 className={styles.sectionTitle}>Customers</h2>
+              <div className={styles.panelHeader}>
+                <h2 className={styles.sectionTitle}>
+                  Customers
+                  <span className={styles.sectionCount}>{customers.length}</span>
+                </h2>
+              </div>
+              <div className={styles.panelBody}>
+              <div className={styles.addFormSection}>
+                <p className={styles.addFormTitle}>Add New Customer</p>
               <form
                 className={styles.gridForm}
-                style={{
-                  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-                  marginBottom: 12,
-                }}
+                style={{ gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" }}
                 onSubmit={async (e) => {
                   e.preventDefault();
                   try {
@@ -667,6 +792,7 @@ export default function AdminPage() {
                   Add Customer
                 </button>
               </form>
+              </div>
 
               <div className={styles.tableWrap}>
                 <table className={styles.table}>
@@ -722,18 +848,24 @@ export default function AdminPage() {
                   </tbody>
                 </table>
               </div>
+              </div>
             </section>
           )}
 
           {activeTab === "bookings" && (
             <section className={styles.panel}>
-              <h2 className={styles.sectionTitle}>Bookings</h2>
+              <div className={styles.panelHeader}>
+                <h2 className={styles.sectionTitle}>
+                  Bookings
+                  <span className={styles.sectionCount}>{bookings.length}</span>
+                </h2>
+              </div>
+              <div className={styles.panelBody}>
+              <div className={styles.addFormSection}>
+                <p className={styles.addFormTitle}>Add New Booking</p>
               <form
                 className={styles.gridForm}
-                style={{
-                  gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
-                  marginBottom: 12,
-                }}
+                style={{ gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))" }}
                 onSubmit={async (e) => {
                   e.preventDefault();
                   try {
@@ -818,6 +950,7 @@ export default function AdminPage() {
                   Add Booking
                 </button>
               </form>
+              </div>
 
               <div className={styles.tableWrap}>
                 <table className={styles.table}>
@@ -878,18 +1011,24 @@ export default function AdminPage() {
                   </tbody>
                 </table>
               </div>
+              </div>
             </section>
           )}
 
           {activeTab === "users" && (
             <section className={styles.panel}>
-              <h2 className={styles.sectionTitle}>Users (Admin only)</h2>
+              <div className={styles.panelHeader}>
+                <h2 className={styles.sectionTitle}>
+                  Users
+                  <span className={styles.sectionCount}>{users.length}</span>
+                </h2>
+              </div>
+              <div className={styles.panelBody}>
+              <div className={styles.addFormSection}>
+                <p className={styles.addFormTitle}>Add New User</p>
               <form
                 className={styles.gridForm}
-                style={{
-                  gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
-                  marginBottom: 12,
-                }}
+                style={{ gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))" }}
                 onSubmit={async (e) => {
                   e.preventDefault();
                   try {
@@ -946,6 +1085,7 @@ export default function AdminPage() {
                   Add User
                 </button>
               </form>
+              </div>
 
               <div className={styles.tableWrap}>
                 <table className={styles.table}>
@@ -1004,18 +1144,24 @@ export default function AdminPage() {
                   </tbody>
                 </table>
               </div>
+              </div>
             </section>
           )}
 
           {activeTab === "courts" && (
             <section className={styles.panel}>
-              <h2 className={styles.sectionTitle}>Courts</h2>
+              <div className={styles.panelHeader}>
+                <h2 className={styles.sectionTitle}>
+                  Courts
+                  <span className={styles.sectionCount}>{courts.length}</span>
+                </h2>
+              </div>
+              <div className={styles.panelBody}>
+              <div className={styles.addFormSection}>
+                <p className={styles.addFormTitle}>Add New Court</p>
               <form
                 className={styles.gridForm}
-                style={{
-                  gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
-                  marginBottom: 12,
-                }}
+                style={{ gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}
                 onSubmit={async (e) => {
                   e.preventDefault();
                   try {
@@ -1064,6 +1210,7 @@ export default function AdminPage() {
                   Add Court
                 </button>
               </form>
+              </div>
 
               <div className={styles.tableWrap}>
                 <table className={styles.table}>
@@ -1123,12 +1270,19 @@ export default function AdminPage() {
                   </tbody>
                 </table>
               </div>
+              </div>
             </section>
           )}
 
           {activeTab === "abuse" && (
             <section className={styles.panel}>
-              <h2 className={styles.sectionTitle}>Abuse Logs</h2>
+              <div className={styles.panelHeader}>
+                <h2 className={styles.sectionTitle}>
+                  Abuse Logs
+                  <span className={styles.sectionCount}>{abuseLogs.length}</span>
+                </h2>
+              </div>
+              <div className={styles.panelBody}>
               <div className={styles.tableWrap}>
                 <table className={styles.table}>
                   <thead>
@@ -1152,6 +1306,7 @@ export default function AdminPage() {
                     ))}
                   </tbody>
                 </table>
+              </div>
               </div>
             </section>
           )}

@@ -4,7 +4,9 @@ import { requireAdminSession } from "@/lib/server/admin-guard";
 import { BookingModel } from "@/lib/server/graphql/models/Booking";
 import { CustomerModel } from "@/lib/server/graphql/models/Customer";
 import { CourtModel } from "@/lib/server/graphql/models/Court";
+import { findOverlappingBlockedSlot } from "@/lib/server/graphql/lib/blocked-slots";
 import { getFriendlyErrorMessage } from "@/lib/server/friendly-error";
+import { triggerBookingsUpdated } from "@/lib/server/pusher-server";
 
 const createSchema = z.object({
   customerId: z.string().min(1),
@@ -26,8 +28,15 @@ export async function GET(): Promise<Response> {
 
     const bookings = await BookingModel.find({}).sort({ createdAt: -1 }).limit(300).populate("customer");
     return Response.json({ data: bookings });
-  } catch {
-    return Response.json({ error: { message: "Unauthorized" } }, { status: 401 });
+  } catch (error) {
+    if (error instanceof Error && error.message === "Unauthorized") {
+      return Response.json({ error: { message: "Unauthorized" } }, { status: 401 });
+    }
+
+    return Response.json(
+      { error: { message: getFriendlyErrorMessage(error, "Failed to fetch bookings") } },
+      { status: 500 }
+    );
   }
 }
 
@@ -56,6 +65,20 @@ export async function POST(request: Request): Promise<Response> {
       return Response.json({ error: { message: "Court not found or inactive" } }, { status: 404 });
     }
 
+    const blockedSlot = await findOverlappingBlockedSlot({
+      courtId: body.courtId,
+      bookingDate: body.bookingDate,
+      startTime: body.startTime,
+      endTime: body.endTime,
+    });
+
+    if (blockedSlot) {
+      return Response.json(
+        { error: { message: "Selected slot is blocked and cannot be booked" } },
+        { status: 409 }
+      );
+    }
+
     const booking = await BookingModel.create({
       customer: customer._id,
       courtId: String(court._id),
@@ -69,6 +92,10 @@ export async function POST(request: Request): Promise<Response> {
     });
 
     const populated = await booking.populate("customer");
+    await triggerBookingsUpdated({
+      bookingId: String(booking._id),
+      action: "created",
+    });
     return Response.json({ data: populated }, { status: 201 });
   } catch (error) {
     return Response.json({ error: { message: getFriendlyErrorMessage(error, "Create failed") } }, { status: 400 });

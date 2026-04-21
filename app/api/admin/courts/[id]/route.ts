@@ -3,6 +3,7 @@ import { ensureGraphQLRuntimeStarted } from "@/lib/server/graphql/runtime";
 import { requireAdminSession } from "@/lib/server/admin-guard";
 import { CourtModel } from "@/lib/server/graphql/models/Court";
 import { getFriendlyErrorMessage } from "@/lib/server/friendly-error";
+import { triggerCourtsUpdated } from "@/lib/server/pusher-server";
 
 const updateSchema = z.object({
   name: z.string().min(2).optional(),
@@ -26,8 +27,15 @@ export async function GET(
     }
 
     return Response.json({ data: court });
-  } catch {
-    return Response.json({ error: { message: "Unauthorized" } }, { status: 401 });
+  } catch (error) {
+    if (error instanceof Error && error.message === "Unauthorized") {
+      return Response.json({ error: { message: "Unauthorized" } }, { status: 401 });
+    }
+
+    return Response.json(
+      { error: { message: getFriendlyErrorMessage(error, "Failed to fetch court") } },
+      { status: 500 }
+    );
   }
 }
 
@@ -48,6 +56,7 @@ export async function PUT(
       return Response.json({ error: { message: "Court not found" } }, { status: 404 });
     }
 
+    void triggerCourtsUpdated();
     return Response.json({ data: court });
   } catch (error) {
     return Response.json(
@@ -72,8 +81,16 @@ export async function DELETE(
       return Response.json({ error: { message: "Court not found" } }, { status: 404 });
     }
 
+    void triggerCourtsUpdated();
     return new Response(null, { status: 204 });
-  } catch {
-    return Response.json({ error: { message: "Unauthorized" } }, { status: 401 });
+  } catch (error) {
+    if (error instanceof Error && error.message === "Unauthorized") {
+      return Response.json({ error: { message: "Unauthorized" } }, { status: 401 });
+    }
+
+    return Response.json(
+      { error: { message: getFriendlyErrorMessage(error, "Failed to delete court") } },
+      { status: 500 }
+    );
   }
 }

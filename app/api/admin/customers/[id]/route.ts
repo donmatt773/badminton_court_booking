@@ -31,8 +31,15 @@ export async function GET(
     }
 
     return Response.json({ data: customer });
-  } catch {
-    return Response.json({ error: { message: "Unauthorized" } }, { status: 401 });
+  } catch (error) {
+    if (error instanceof Error && error.message === "Unauthorized") {
+      return Response.json({ error: { message: "Unauthorized" } }, { status: 401 });
+    }
+
+    return Response.json(
+      { error: { message: getFriendlyErrorMessage(error, "Failed to fetch customer") } },
+      { status: 500 }
+    );
   }
 }
 
@@ -73,7 +80,14 @@ export async function DELETE(
     }
 
     return new Response(null, { status: 204 });
-  } catch {
-    return Response.json({ error: { message: "Unauthorized" } }, { status: 401 });
+  } catch (error) {
+    if (error instanceof Error && error.message === "Unauthorized") {
+      return Response.json({ error: { message: "Unauthorized" } }, { status: 401 });
+    }
+
+    return Response.json(
+      { error: { message: getFriendlyErrorMessage(error, "Failed to delete customer") } },
+      { status: 500 }
+    );
   }
 }

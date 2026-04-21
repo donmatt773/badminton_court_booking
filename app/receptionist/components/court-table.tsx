@@ -11,9 +11,9 @@ export interface Court {
 
 const statusColor = (status: Court["status"]): string => {
   switch (status) {
-    case "active": return "#059669";
+    case "active": return "#1D9E75";
     case "inactive": return "#64748b";
-    case "maintenance": return "#f59e42";
+    case "maintenance": return "#92600a";
     default: return "#334155";
   }
 };
@@ -38,15 +38,15 @@ const CourtTable: FC = () => {
 
   return (
     <div style={{ overflowX: "auto" }}>
-      {loading && <p className="text-blue-600 font-medium mb-4">Loading...</p>}
+      {loading && <p className="text-[#1D9E75] font-medium mb-4">Loading...</p>}
       {error && <p className="text-red-600 bg-red-50 rounded-md px-4 py-2 mb-4 font-medium">{error}</p>}
-      <table className="w-full border-collapse bg-white rounded-xl shadow">
+      <table className="w-full border-collapse bg-white rounded-xl shadow text-sm" style={{ minWidth: "1100px" }}>
         <thead>
           <tr className="bg-slate-100 text-slate-700">
-            <th className="px-4 py-3 font-semibold text-left">Name</th>
-            <th className="px-4 py-3 font-semibold text-left">Surface Type</th>
-            <th className="px-4 py-3 font-semibold text-left">Status</th>
-            <th className="px-4 py-3 font-semibold text-left">View Schedule</th>
+            <th className="px-2 py-2 font-semibold text-left whitespace-nowrap">Name</th>
+            <th className="px-2 py-2 font-semibold text-left whitespace-nowrap">Surface Type</th>
+            <th className="px-2 py-2 font-semibold text-left whitespace-nowrap">Status</th>
+            <th className="px-2 py-2 font-semibold text-left whitespace-nowrap">View Schedule</th>
           </tr>
         </thead>
         <tbody>
@@ -57,12 +57,12 @@ const CourtTable: FC = () => {
           )}
           {courts.map((court) => (
             <tr key={court._id} className="border-b border-slate-200 last:border-b-0">
-              <td className="px-4 py-3 text-slate-800">{court.name}</td>
-              <td className="px-4 py-3 capitalize text-slate-800">{court.surfaceType}</td>
-              <td className="px-4 py-3 font-semibold" style={{ color: statusColor(court.status) }}>{court.status}</td>
-              <td className="px-4 py-3">
+              <td className="px-2 py-2 text-slate-800 whitespace-nowrap">{court.name}</td>
+              <td className="px-2 py-2 capitalize text-slate-800 whitespace-nowrap">{court.surfaceType}</td>
+              <td className="px-2 py-2 font-semibold whitespace-nowrap" style={{ color: statusColor(court.status) }}>{court.status}</td>
+              <td className="px-2 py-2">
                 <button
-                  className="px-3 py-1 rounded bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700"
+                  className="px-2 py-0.5 rounded bg-[#1D9E75] text-white text-sm font-semibold hover:bg-[#17876a]"
                   onClick={() => setModalCourt({ id: court._id, name: court.name })}
                 >
                   View Schedule

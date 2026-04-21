@@ -67,6 +67,17 @@ export const typeDefs = `#graphql
     updatedAt: String!
   }
 
+  type BlockedSlot {
+    id: ID!
+    courtId: String!
+    bookingDate: String!
+    startTime: String!
+    endTime: String!
+    reason: String
+    createdAt: String!
+    updatedAt: String!
+  }
+
   type StaffUser {
     id: ID!
     name: String!
@@ -99,6 +110,7 @@ export const typeDefs = `#graphql
 
   type Query {
     bookings(bookingDate: String, courtId: String): [Booking!]!
+    blockedSlots(bookingDate: String, courtId: String): [BlockedSlot!]!
     courts: [Court!]!
     abuseLogs(limit: Int = 50): [AbuseLog!]!
   }

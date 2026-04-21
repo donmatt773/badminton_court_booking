@@ -2,7 +2,9 @@ import { z } from "zod";
 import { ensureGraphQLRuntimeStarted } from "@/lib/server/graphql/runtime";
 import { requireAdminSession } from "@/lib/server/admin-guard";
 import { BookingModel } from "@/lib/server/graphql/models/Booking";
+import { findOverlappingBlockedSlot } from "@/lib/server/graphql/lib/blocked-slots";
 import { getFriendlyErrorMessage } from "@/lib/server/friendly-error";
+import { triggerBookingsUpdated } from "@/lib/server/pusher-server";
 
 const updateSchema = z.object({
   courtId: z.string().min(1).optional(),
@@ -30,8 +32,15 @@ export async function GET(
     }
 
     return Response.json({ data: booking });
-  } catch {
-    return Response.json({ error: { message: "Unauthorized" } }, { status: 401 });
+  } catch (error) {
+    if (error instanceof Error && error.message === "Unauthorized") {
+      return Response.json({ error: { message: "Unauthorized" } }, { status: 401 });
+    }
+
+    return Response.json(
+      { error: { message: getFriendlyErrorMessage(error, "Failed to fetch booking") } },
+      { status: 500 }
+    );
   }
 }
 
@@ -83,6 +92,33 @@ export async function PUT(
       }
     }
 
+    const isSlotMutation =
+      body.courtId !== undefined ||
+      body.bookingDate !== undefined ||
+      body.startTime !== undefined ||
+      body.endTime !== undefined;
+
+    if (isSlotMutation) {
+      const nextCourtId = body.courtId ?? existingBooking.courtId;
+      const nextBookingDate = body.bookingDate ?? existingBooking.bookingDate;
+      const nextStartTime = body.startTime ?? existingBooking.startTime;
+      const nextEndTime = body.endTime ?? existingBooking.endTime;
+
+      const blockedSlot = await findOverlappingBlockedSlot({
+        courtId: nextCourtId,
+        bookingDate: nextBookingDate,
+        startTime: nextStartTime,
+        endTime: nextEndTime,
+      });
+
+      if (blockedSlot) {
+        return Response.json(
+          { error: { message: "Selected slot is blocked and cannot be used" } },
+          { status: 409 }
+        );
+      }
+    }
+
     const updatePayload: Record<string, unknown> = {
       ...body,
     };
@@ -94,6 +130,11 @@ export async function PUT(
     }
 
     const booking = await BookingModel.findByIdAndUpdate(id, updatePayload, { new: true }).populate("customer");
+
+    await triggerBookingsUpdated({
+      bookingId: id,
+      action: "updated",
+    });
 
     return Response.json({ data: booking });
   } catch (error) {
@@ -115,8 +156,20 @@ export async function DELETE(
       return Response.json({ error: { message: "Booking not found" } }, { status: 404 });
     }
 
+    await triggerBookingsUpdated({
+      bookingId: id,
+      action: "deleted",
+    });
+
     return new Response(null, { status: 204 });
-  } catch {
-    return Response.json({ error: { message: "Unauthorized" } }, { status: 401 });
+  } catch (error) {
+    if (error instanceof Error && error.message === "Unauthorized") {
+      return Response.json({ error: { message: "Unauthorized" } }, { status: 401 });
+    }
+
+    return Response.json(
+      { error: { message: getFriendlyErrorMessage(error, "Failed to delete booking") } },
+      { status: 500 }
+    );
   }
 }

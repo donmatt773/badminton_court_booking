@@ -1,8 +1,12 @@
 "use client";
 
+import { gql } from "@apollo/client";
+import { useMutation, useQuery } from "@apollo/client/react";
 import Image from "next/image";
 import Link from "next/link";
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import { getPusherClient } from "@/lib/client/pusher-client";
+import { REALTIME_CHANNELS, REALTIME_EVENTS } from "@/lib/shared/realtime-events";
 
 type Court = {
   id: string;
@@ -27,6 +31,15 @@ type Booking = {
     | "DENIED";
 };
 
+type BlockedSlot = {
+  id: string;
+  courtId: string;
+  bookingDate: string;
+  startTime: string;
+  endTime: string;
+  reason?: string | null;
+};
+
 type BookingInput = {
   name: string;
   contactNumber: string;
@@ -43,12 +56,45 @@ type LastSubmitted = {
   bookingId: string;
 };
 
-type GraphQLResponse<T> = {
-  data?: T;
-  errors?: Array<{ message?: string }>;
-};
+// ---------------------------------------------------------------------------
+// Time configuration
+// ---------------------------------------------------------------------------
+const SLOT_START_HOUR = 8;   // 8:00 AM
+const SLOT_END_HOUR   = 22;  // 10:00 PM
 
-const COURTS_AND_BOOKINGS_QUERY = `
+/** All selectable hours as "HH:00" strings */
+function generateHours(): string[] {
+  const hours: string[] = [];
+  for (let h = SLOT_START_HOUR; h <= SLOT_END_HOUR; h++) {
+    hours.push(`${String(h).padStart(2, "0")}:00`);
+  }
+  return hours;
+}
+
+const ALL_HOURS = generateHours();
+// Alias kept for court-card dot counting
+const ALL_SLOTS = ALL_HOURS.slice(0, -1); // start hours only (8-21)
+
+function formatHour(hhmm: string): string {
+  const [h] = hhmm.split(":").map(Number);
+  if (isNaN(h)) return hhmm;
+  const hour = h % 12 === 0 ? 12 : h % 12;
+  return `${hour}:00 ${h < 12 ? "AM" : "PM"}`;
+}
+
+function addHour(hhmm: string, delta = 1): string {
+  const [h, m] = hhmm.split(":").map(Number);
+  return `${String(h + delta).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+function rangesOverlap(startA: string, endA: string, startB: string, endB: string): boolean {
+  return startA < endB && endA > startB;
+}
+
+// ---------------------------------------------------------------------------
+// GraphQL helpers
+// ---------------------------------------------------------------------------
+const COURTS_AND_BOOKINGS_QUERY = gql`
   query CourtsAndBookings($bookingDate: String) {
     courts {
       id
@@ -64,10 +110,18 @@ const COURTS_AND_BOOKINGS_QUERY = `
       endTime
       status
     }
+    blockedSlots(bookingDate: $bookingDate) {
+      id
+      courtId
+      bookingDate
+      startTime
+      endTime
+      reason
+    }
   }
 `;
 
-const CREATE_BOOKING_MUTATION = `
+const CREATE_BOOKING_MUTATION = gql`
   mutation CreateBooking($input: CreateBookingInput!) {
     createBooking(input: $input) {
       id
@@ -85,45 +139,264 @@ function todayISODate(): string {
 }
 
 function getErrorMessage(error: unknown, fallback: string): string {
-  if (error instanceof Error && error.message) {
-    return error.message;
-  }
-
+  if (error instanceof Error && error.message) return error.message;
   return fallback;
 }
 
-async function graphqlFetch<T>(query: string, variables?: Record<string, unknown>): Promise<T> {
-  const response = await fetch("/api/graphql", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({ query, variables }),
-  });
+// ---------------------------------------------------------------------------
+// Sub-components
+// ---------------------------------------------------------------------------
 
-  const payload = (await response.json()) as GraphQLResponse<T>;
-
-  if (!response.ok || payload.errors?.length) {
-    const message = payload.errors?.[0]?.message ?? "Request failed. Please try again.";
-    throw new Error(message);
-  }
-
-  if (!payload.data) {
-    throw new Error("No data returned from server.");
-  }
-
-  return payload.data;
+/** Dot strip showing slot occupancy at a glance */
+function SlotDots({ total, taken }: { total: number; taken: number }) {
+  return (
+    <div style={{ display: "flex", gap: 3, flexWrap: "wrap", margin: "8px 0 12px" }}>
+      {Array.from({ length: total }).map((_, i) => (
+        <span
+          key={i}
+          style={{
+            display: "block",
+            width: 8,
+            height: 8,
+            borderRadius: "50%",
+            background: i < taken ? "#E24B4A" : "#1D9E75",
+            flexShrink: 0,
+          }}
+        />
+      ))}
+    </div>
+  );
 }
 
+
+
+// ---------------------------------------------------------------------------
+// CalendarPicker sub-component
+// ---------------------------------------------------------------------------
+function CalendarPicker({
+  selected,
+  minDate,
+  onSelect,
+}: {
+  selected: string;
+  minDate: string;
+  onSelect: (date: string) => void;
+}) {
+  const today = new Date();
+  const initDate = selected ? new Date(selected + "T00:00:00") : today;
+  const [viewYear, setViewYear] = useState(initDate.getFullYear());
+  const [viewMonth, setViewMonth] = useState(initDate.getMonth());
+
+  const MONTH_NAMES = [
+    "January","February","March","April","May","June",
+    "July","August","September","October","November","December",
+  ];
+  const DAY_LABELS = ["Su","Mo","Tu","We","Th","Fr","Sa"];
+
+  const todayY = today.getFullYear();
+  const todayM = today.getMonth();
+  const canGoPrev = viewYear > todayY || (viewYear === todayY && viewMonth > todayM);
+  const firstDayOfWeek = new Date(viewYear, viewMonth, 1).getDay();
+  const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+
+  function prevMonth() {
+    if (!canGoPrev) return;
+    if (viewMonth === 0) { setViewYear((y) => y - 1); setViewMonth(11); }
+    else setViewMonth((m) => m - 1);
+  }
+  function nextMonth() {
+    if (viewMonth === 11) { setViewYear((y) => y + 1); setViewMonth(0); }
+    else setViewMonth((m) => m + 1);
+  }
+
+  const cells: (number | null)[] = [];
+  for (let i = 0; i < firstDayOfWeek; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+
+  return (
+    <div style={{ userSelect: "none" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+        <button
+          type="button"
+          onClick={prevMonth}
+          disabled={!canGoPrev}
+          style={{
+            background: "none", border: "1px solid var(--color-border-secondary)",
+            borderRadius: 6, width: 28, height: 28,
+            cursor: canGoPrev ? "pointer" : "not-allowed",
+            fontSize: 16, color: canGoPrev ? "var(--color-text-primary)" : "#ccc",
+            display: "flex", alignItems: "center", justifyContent: "center",
+          }}
+        >‹</button>
+        <span style={{ fontSize: 13, fontWeight: 600, color: "var(--color-text-primary)" }}>
+          {MONTH_NAMES[viewMonth]} {viewYear}
+        </span>
+        <button
+          type="button"
+          onClick={nextMonth}
+          style={{
+            background: "none", border: "1px solid var(--color-border-secondary)",
+            borderRadius: 6, width: 28, height: 28, cursor: "pointer",
+            fontSize: 16, color: "var(--color-text-primary)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+          }}
+        >›</button>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", textAlign: "center", marginBottom: 4 }}>
+        {DAY_LABELS.map((d) => (
+          <span key={d} style={{ fontSize: 10, fontWeight: 600, color: "var(--color-text-secondary)", padding: "2px 0" }}>
+            {d}
+          </span>
+        ))}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 2 }}>
+        {cells.map((day, idx) => {
+          if (!day) return <span key={idx} />;
+          const dateStr = `${viewYear}-${String(viewMonth + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+          const isPast = dateStr < minDate;
+          const isSelected = dateStr === selected;
+          const isToday = dateStr === todayISODate();
+          return (
+            <button
+              key={idx}
+              type="button"
+              disabled={isPast}
+              onClick={() => !isPast && onSelect(dateStr)}
+              style={{
+                padding: "7px 2px",
+                fontSize: 12,
+                textAlign: "center",
+                borderRadius: 6,
+                border: isToday && !isSelected ? "1px solid #1D9E75" : "1px solid transparent",
+                background: isSelected ? "#1D9E75" : "transparent",
+                color: isSelected ? "#fff" : isPast ? "#d0d0d0" : "var(--color-text-primary)",
+                cursor: isPast ? "default" : "pointer",
+                fontWeight: isSelected || isToday ? 600 : 400,
+                transition: "background 0.1s",
+              }}
+            >
+              {day}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// TimelinePicker sub-component
+// ---------------------------------------------------------------------------
+function formatHourShort(hhmm: string): string {
+  const [h] = hhmm.split(":").map(Number);
+  if (isNaN(h)) return hhmm;
+  const hour = h % 12 === 0 ? 12 : h % 12;
+  return `${hour}${h < 12 ? "a" : "p"}`;
+}
+
+function TimelinePicker({
+  startTime,
+  endTime,
+  activeBookings,
+  blockedRanges,
+  onChange,
+}: {
+  startTime: string;
+  endTime: string;
+  activeBookings: Array<{ startTime: string; endTime: string }>;
+  blockedRanges: Array<{ startTime: string; endTime: string }>;
+  onChange: (start: string, end: string) => void;
+}) {
+  function handleClick(hour: string) {
+    const next = addHour(hour);
+    if (activeBookings.some((b) => rangesOverlap(hour, next, b.startTime, b.endTime))) return;
+    if (blockedRanges.some((b) => rangesOverlap(hour, next, b.startTime, b.endTime))) return;
+    if (!startTime || (startTime && endTime)) {
+      onChange(hour, "");
+    } else if (hour <= startTime) {
+      onChange(hour, "");
+    } else {
+      onChange(startTime, addHour(hour));
+    }
+  }
+
+  function getSegmentState(hour: string): "booked" | "blocked" | "selected" | "pending-start" | "available" {
+    const next = addHour(hour);
+    if (activeBookings.some((b) => rangesOverlap(hour, next, b.startTime, b.endTime))) return "booked";
+    if (blockedRanges.some((b) => rangesOverlap(hour, next, b.startTime, b.endTime))) return "blocked";
+    if (startTime && !endTime && hour === startTime) return "pending-start";
+    if (startTime && endTime && hour >= startTime && next <= endTime) return "selected";
+    return "available";
+  }
+
+  return (
+    <div>
+      <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: "1px solid var(--color-border-secondary)" }}>
+        {ALL_SLOTS.map((hour, i) => {
+          const state = getSegmentState(hour);
+          const isUnavailable = state === "booked" || state === "blocked";
+          const isActive = state === "selected" || state === "pending-start";
+          return (
+            <button
+              key={hour}
+              type="button"
+              disabled={isUnavailable}
+              title={`${formatHour(hour)}${state === "booked" ? " · booked" : state === "blocked" ? " · blocked" : ""}`}
+              onClick={() => handleClick(hour)}
+              style={{
+                flex: 1,
+                minWidth: 0,
+                padding: "10px 0",
+                background: isActive ? "#1D9E75" : state === "booked" ? "#FDE7E7" : state === "blocked" ? "#FFF4E0" : "#f8faf9",
+                color: isActive ? "#ffffff" : state === "booked" ? "#8F2D2D" : state === "blocked" ? "#8A5208" : "var(--color-text-secondary)",
+                border: "none",
+                borderLeft: i > 0 ? "1px solid rgba(0,0,0,0.07)" : "none",
+                cursor: isUnavailable ? "not-allowed" : "pointer",
+                fontSize: 9,
+                textAlign: "center",
+                fontWeight: isActive ? 600 : 400,
+                textDecoration: isUnavailable ? "line-through" : "none",
+                transition: "background 0.1s",
+                overflow: "hidden",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {formatHourShort(hour)}
+            </button>
+          );
+        })}
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6 }}>
+        <div style={{ display: "flex", gap: 10, fontSize: 10, color: "var(--color-text-secondary)" }}>
+          <span style={{ display: "flex", alignItems: "center", gap: 3 }}>
+            <span style={{ width: 8, height: 8, background: "#FDE7E7", border: "1px solid #F3B4B4", borderRadius: 2, display: "inline-block" }} />
+            Booked
+          </span>
+          <span style={{ display: "flex", alignItems: "center", gap: 3 }}>
+            <span style={{ width: 8, height: 8, background: "#FFF4E0", border: "1px dashed #EAB773", borderRadius: 2, display: "inline-block" }} />
+            Blocked
+          </span>
+        </div>
+        <span style={{ fontSize: 11, fontWeight: 500, color: startTime ? "#0F6E56" : "var(--color-text-secondary)" }}>
+          {!startTime
+            ? "Click a segment to set start"
+            : !endTime
+            ? `${formatHour(startTime)} — click to set end`
+            : `${formatHour(startTime)} – ${formatHour(endTime)}`}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Main component
+// ---------------------------------------------------------------------------
 export default function BookingExperience() {
-  const [courts, setCourts] = useState<Court[]>([]);
-  const [bookings, setBookings] = useState<Booking[]>([]);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
-  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
-  const [statusMessage, setStatusMessage] = useState<string>("");
-  const [errorMessage, setErrorMessage] = useState<string>("");
+  const [submissionErrorMessage, setSubmissionErrorMessage] = useState("");
+  const [statusMessage, setStatusMessage] = useState("");
   const [lastSubmitted, setLastSubmitted] = useState<LastSubmitted | null>(null);
-  const [isReservationModalOpen, setIsReservationModalOpen] = useState<boolean>(false);
+  const [isModalOpen, setIsModalOpen] = useState(false);
 
   const [form, setForm] = useState<BookingInput>({
     name: "",
@@ -131,28 +404,67 @@ export default function BookingExperience() {
     email: "",
     courtId: "",
     bookingDate: todayISODate(),
-    startTime: "18:00",
-    endTime: "19:00",
+    startTime: "",
+    endTime: "",
   });
 
-  const courtBookings = useMemo(() => {
-    return bookings.filter((booking) => booking.courtId === form.courtId);
-  }, [bookings, form.courtId]);
+  const {
+    data,
+    loading: isLoading,
+    error: queryError,
+    refetch,
+  } = useQuery<{
+    courts: Court[];
+    bookings: Booking[];
+    blockedSlots: BlockedSlot[];
+  }>(COURTS_AND_BOOKINGS_QUERY, {
+    variables: {
+      bookingDate: form.bookingDate,
+    },
+  });
 
-  const selectedCourt = useMemo(() => {
-    return courts.find((court) => court.id === form.courtId) ?? null;
-  }, [courts, form.courtId]);
+  const [createBooking, { loading: isSubmitting }] = useMutation<{
+    createBooking: Booking;
+  }>(CREATE_BOOKING_MUTATION);
 
-  const inputClassName =
-    "h-11 w-full appearance-none rounded-[0.74rem] border border-[rgba(27,123,62,0.24)] bg-[rgba(255,255,255,0.94)] px-[0.74rem] py-[0.68rem] text-[0.96rem] text-[#143d25] outline-none transition-[border-color,box-shadow] duration-200 ease-in focus:border-[rgba(129,255,185,0.8)] focus:shadow-[0_0_0_3px_rgba(92,247,161,0.2)] dark:border-[rgba(118,255,177,0.25)] dark:bg-[rgba(8,25,17,0.88)] dark:text-[#ecfff3]";
+  const courts = data?.courts ?? [];
+  const bookings = data?.bookings ?? [];
+  const blockedSlots = data?.blockedSlots ?? [];
+  const errorMessage = submissionErrorMessage || (queryError?.message ?? "");
 
-  const fieldLabelClassName = "grid gap-[0.34rem] text-[0.87rem] text-[#1d5a34] dark:text-[#9ce8be]";
+  // Active bookings for the selected court (for overlap validation)
+  const activeBookingsForCourt = useMemo(
+    () =>
+      bookings.filter(
+        (b) =>
+          b.courtId === form.courtId &&
+          !['EXPIRED', 'CANCELLED', 'DENIED'].includes(b.status)
+      ),
+    [bookings, form.courtId]
+  );
+
+  // Blocked slots for the selected court
+  const courtBlockedSlots = useMemo(
+    () => blockedSlots.filter((s) => s.courtId === form.courtId),
+    [blockedSlots, form.courtId]
+  );
+
+  // Check if a proposed start/end overlaps any booking or blocked slot
+  function hasConflict(start: string, end: string): boolean {
+    if (!start || !end || start >= end) return false;
+    return (
+      activeBookingsForCourt.some((b) => rangesOverlap(start, end, b.startTime, b.endTime)) ||
+      courtBlockedSlots.some((b) => rangesOverlap(start, end, b.startTime, b.endTime))
+    );
+  }
+
+  const selectedCourt = useMemo(
+    () => courts.find((c) => c.id === form.courtId) ?? null,
+    [courts, form.courtId]
+  );
 
   const trackingParams = useMemo(() => {
-    if (!lastSubmitted) {
-      return "";
-    }
-
+    if (!lastSubmitted) return "";
     return new URLSearchParams({
       email: lastSubmitted.email,
       date: lastSubmitted.bookingDate,
@@ -160,211 +472,510 @@ export default function BookingExperience() {
     }).toString();
   }, [lastSubmitted]);
 
-  const loadData = useCallback(async (date: string): Promise<void> => {
-    setIsLoading(true);
-    setErrorMessage("");
+  useEffect(() => {
+    setForm((prev) => {
+      const hasCurrentCourt = courts.some((court) => court.id === prev.courtId);
+      if (hasCurrentCourt || courts.length === 0) {
+        return prev;
+      }
 
-    try {
-      const data = await graphqlFetch<{
-        courts: Court[];
-        bookings: Booking[];
-      }>(COURTS_AND_BOOKINGS_QUERY, { bookingDate: date });
-
-      setCourts(data.courts ?? []);
-      setBookings(data.bookings ?? []);
-
-      setForm((previous) => {
-        const hasCurrentCourt = data.courts.some((court) => court.id === previous.courtId);
-
-        if (hasCurrentCourt || data.courts.length === 0) {
-          return previous;
-        }
-
-        return {
-          ...previous,
-          courtId: data.courts[0].id,
-        };
-      });
-    } catch (error) {
-      setErrorMessage(getErrorMessage(error, "Unable to load courts right now."));
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
+      return { ...prev, courtId: courts[0].id };
+    });
+  }, [courts]);
 
   useEffect(() => {
-    void loadData(form.bookingDate);
-
-    const timer = window.setInterval(() => {
-      void loadData(form.bookingDate);
-    }, 20_000);
-
-    return () => {
-      window.clearInterval(timer);
-    };
-  }, [form.bookingDate, loadData]);
-
-  function onDateChange(nextDate: string): void {
-    setForm((previous) => ({ ...previous, bookingDate: nextDate }));
-  }
-
-  function openReservationModal(courtId: string): void {
-    setForm((previous) => ({
-      ...previous,
-      courtId,
-    }));
-    setStatusMessage("");
-    setErrorMessage("");
-    setIsReservationModalOpen(true);
-  }
-
-  function closeReservationModal(): void {
-    setIsReservationModalOpen(false);
-  }
-
-  useEffect(() => {
-    if (!isReservationModalOpen) {
+    const pusher = getPusherClient();
+    if (!pusher) {
       return;
     }
 
-    function onKeyDown(event: KeyboardEvent): void {
-      if (event.key === "Escape") {
-        closeReservationModal();
-      }
-    }
+    const bookingChannel = pusher.subscribe(REALTIME_CHANNELS.bookings);
+    const blockedSlotChannel = pusher.subscribe(REALTIME_CHANNELS.blockedSlots);
+    const courtsChannel = pusher.subscribe(REALTIME_CHANNELS.courts);
+    const handleUpdate = () => {
+      void refetch();
+    };
 
-    document.body.style.overflow = "hidden";
-    window.addEventListener("keydown", onKeyDown);
+    bookingChannel.bind(REALTIME_EVENTS.updated, handleUpdate);
+    blockedSlotChannel.bind(REALTIME_EVENTS.updated, handleUpdate);
+    courtsChannel.bind(REALTIME_EVENTS.updated, handleUpdate);
 
     return () => {
-      document.body.style.overflow = "";
-      window.removeEventListener("keydown", onKeyDown);
+      bookingChannel.unbind(REALTIME_EVENTS.updated, handleUpdate);
+      blockedSlotChannel.unbind(REALTIME_EVENTS.updated, handleUpdate);
+      courtsChannel.unbind(REALTIME_EVENTS.updated, handleUpdate);
+      pusher.unsubscribe(REALTIME_CHANNELS.bookings);
+      pusher.unsubscribe(REALTIME_CHANNELS.blockedSlots);
+      pusher.unsubscribe(REALTIME_CHANNELS.courts);
     };
-  }, [isReservationModalOpen]);
+  }, [refetch]);
 
-  async function onSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault();
-    setIsSubmitting(true);
-    setErrorMessage("");
+  // Close modal on Escape
+  useEffect(() => {
+    if (!isModalOpen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setIsModalOpen(false); };
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = "";
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [isModalOpen]);
+
+  // -------------------------------------------------------------------------
+  function openModal(courtId: string) {
+    setForm((prev) => ({ ...prev, courtId, startTime: "", endTime: "" }));
     setStatusMessage("");
+    setSubmissionErrorMessage("");
+    setIsModalOpen(true);
+  }
 
+  async function onSubmit(e: FormEvent<HTMLFormElement>): Promise<void> {
+    e.preventDefault();
+    if (!form.startTime || !form.endTime) {
+      setSubmissionErrorMessage("Please select both a time in and time out.");
+      return;
+    }
+    if (form.startTime >= form.endTime) {
+      setSubmissionErrorMessage("Time out must be after time in.");
+      return;
+    }
+    if (hasConflict(form.startTime, form.endTime)) {
+      setSubmissionErrorMessage("That time range overlaps an existing booking or blocked slot. Please choose a different time.");
+      return;
+    }
+    setSubmissionErrorMessage("");
+    setStatusMessage("");
     try {
-      const result = await graphqlFetch<{ createBooking: Booking }>(CREATE_BOOKING_MUTATION, {
-        input: form,
+      const result = await createBooking({
+        variables: { input: form },
       });
-
-      setStatusMessage("Booking request submitted. Status is now pending approval.");
-      setLastSubmitted({
-        email: form.email,
-        bookingDate: form.bookingDate,
-        bookingId: result.createBooking.id,
-      });
-      setIsReservationModalOpen(false);
-      await loadData(form.bookingDate);
+      const createdBooking = result.data?.createBooking;
+      if (!createdBooking) {
+        throw new Error("Booking could not be submitted.");
+      }
+      setStatusMessage("Reservation submitted! Your slot is pending admin approval.");
+      setLastSubmitted({ email: form.email, bookingDate: form.bookingDate, bookingId: createdBooking.id });
+      setIsModalOpen(false);
+      await refetch();
     } catch (error) {
-      setErrorMessage(getErrorMessage(error, "Booking could not be submitted."));
-    } finally {
-      setIsSubmitting(false);
+      setSubmissionErrorMessage(getErrorMessage(error, "Booking could not be submitted."));
     }
   }
 
+  // -------------------------------------------------------------------------
+  // Shared style snippets
+  // -------------------------------------------------------------------------
+  const inputStyle: React.CSSProperties = {
+    height: 40,
+    width: "100%",
+    boxSizing: "border-box",
+    padding: "0 10px",
+    fontSize: 13,
+    color: "var(--color-text-primary)",
+    background: "var(--color-background-primary)",
+    border: "0.5px solid var(--color-border-secondary)",
+    borderRadius: "var(--border-radius-md)",
+    outline: "none",
+  };
+
+  const labelStyle: React.CSSProperties = {
+    display: "grid",
+    gap: 4,
+    fontSize: 12,
+    color: "var(--color-text-secondary)",
+  };
+
+  // -------------------------------------------------------------------------
   return (
-    <div className="min-h-dvh bg-[radial-gradient(circle_at_14%_9%,rgba(74,213,120,0.24),transparent_33%),radial-gradient(circle_at_85%_15%,rgba(128,245,158,0.2),transparent_31%),linear-gradient(165deg,#f0fff5_0%,#daffec_52%,#d2ffe4_100%)] text-[#113120] dark:bg-[radial-gradient(circle_at_8%_8%,rgba(83,255,158,0.2),transparent_34%),radial-gradient(circle_at_88%_14%,rgba(62,227,122,0.16),transparent_28%),linear-gradient(165deg,#07170f_0%,#0b2418_52%,#040a08_100%)] dark:text-[#e8ffee]">
-      <nav className="sticky top-0 z-30 border-b border-[rgba(31,120,63,0.25)] bg-[rgba(245,255,250,0.88)] backdrop-blur-lg dark:border-[rgba(98,255,174,0.2)] dark:bg-[rgba(5,19,13,0.82)]">
-        <div className="mx-auto flex max-w-280 items-center justify-between px-4 py-1.5">
-          <a href="#home" className="inline-flex">
-            <Image src="/assets/LOGO-NEW-SPORTSCENTER.png" alt="Sports Center logo" width={140} height={32} priority />
+    <div
+      style={{
+        minHeight: "100dvh",
+        background:
+          "radial-gradient(ellipse 90% 55% at 70% -5%, rgba(29,158,117,0.13) 0%, transparent 55%)," +
+          "radial-gradient(ellipse 60% 45% at -5% 55%, rgba(29,158,117,0.09) 0%, transparent 50%)," +
+          "#f6fbf8",
+        color: "var(--color-text-primary)",
+        fontFamily: "var(--font-sans)",
+      }}
+    >
+      {/* ── NAV ── */}
+      <nav
+        style={{
+          position: "sticky",
+          top: 0,
+          zIndex: 30,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          padding: "10px 24px",
+          background: "#1D9E75",
+          borderBottom: "1px solid #17876a",
+          boxShadow: "0 2px 12px rgba(13,100,68,0.18)",
+        }}
+      >
+        <a href="#home" style={{ display: "inline-flex" }}>
+          <Image src="/assets/LOGO-NEW-SPORTSCENTER.png" alt="Sports Center" width={130} height={30} priority />
+        </a>
+        <div style={{ display: "flex", alignItems: "center", gap: 20, fontSize: 13 }}>
+          <a href="#home" style={{ color: "rgba(255,255,255,0.85)", textDecoration: "none" }}>Home</a>
+          <a href="#courts" style={{ color: "rgba(255,255,255,0.85)", textDecoration: "none" }}>Courts</a>
+          <Link
+            href="/customer/status"
+            style={{ color: "rgba(255,255,255,0.85)", textDecoration: "none" }}
+          >
+            Track booking
+          </Link>
+          <a
+            href="#courts"
+            style={{
+              background: "#ffffff",
+              color: "#0d6b4e",
+              padding: "8px 16px",
+              borderRadius: "var(--border-radius-md)",
+              textDecoration: "none",
+              fontWeight: 600,
+              fontSize: 13,
+              boxShadow: "0 1px 4px rgba(0,0,0,0.12)",
+            }}
+          >
+            Reserve a court
           </a>
-          <div className="flex items-center gap-6 text-sm font-semibold">
-            <a href="#home" className="text-[#1b5c35] hover:text-[#0f341f] dark:text-[#a8f4c8] dark:hover:text-[#dffff0]">Home</a>
-            <a href="#courts" className="text-[#1b5c35] hover:text-[#0f341f] dark:text-[#a8f4c8] dark:hover:text-[#dffff0]">Courts</a>
-          </div>
         </div>
       </nav>
 
-      <section id="home" className="mx-auto max-w-280 px-4 pt-10 pb-6 md:pt-16">
-        <div className="rounded-[1.25rem] border border-[rgba(20,113,56,0.2)] bg-[rgba(245,255,250,0.84)] p-[clamp(1.2rem,3vw,2rem)] shadow-[0_14px_40px_rgba(10,74,40,0.1)] backdrop-blur-sm dark:border-[rgba(100,255,176,0.25)] dark:bg-[linear-gradient(145deg,rgba(22,64,44,0.86),rgba(8,24,16,0.88))] dark:shadow-[0_18px_60px_rgba(4,14,10,0.5)]">
-          <div className="grid items-center gap-6 lg:grid-cols-[1.1fr_0.9fr]">
-            <div>
-              <p className="m-0 text-[0.78rem] font-bold uppercase tracking-[0.11em] text-[#1d5a34] dark:text-[#8dffc0]">Showcase Landing</p>
-              <h1 className="mt-[0.65rem] mb-0 text-[clamp(2rem,5vw,3.2rem)] leading-[1.08] text-[#0f341f] dark:text-[#f4fff7]">Reserve your badminton court with a premium booking flow.</h1>
-              <p className="mt-[0.7rem] mb-0 max-w-[60ch] text-[#1d5a34] dark:text-[#baf9d4]">
-                Browse our courts, pick one you like, and open a quick reservation modal to submit your slot request.
-              </p>
-              <div className="mt-6 flex flex-wrap items-center gap-3">
-                <a href="#courts" className="inline-flex rounded-full bg-[linear-gradient(90deg,#32cc70_0%,#5df28d_100%)] px-5 py-3 text-sm font-extrabold text-[#03230f] transition-transform duration-200 hover:-translate-y-px">Explore Courts</a>
-                <Link href="/customer/status" className="inline-flex rounded-full border border-[rgba(27,123,62,0.35)] px-5 py-3 text-sm font-bold text-[#0f341f] dark:border-[rgba(112,255,179,0.35)] dark:text-[#cbffe1]">
-                  Track Booking
-                </Link>
-              </div>
-            </div>
-
-            <div className="relative min-h-[220px] overflow-hidden rounded-2xl border border-[rgba(19,102,54,0.17)] bg-[linear-gradient(160deg,rgba(222,255,236,0.9),rgba(190,245,212,0.9))] shadow-[0_10px_30px_rgba(10,74,40,0.1)] dark:border-[rgba(119,255,187,0.2)] dark:bg-[linear-gradient(160deg,rgba(16,52,35,0.95),rgba(8,27,18,0.95))]">
-              <div className="absolute inset-3 rounded-xl border-2 border-[rgba(18,99,55,0.85)] dark:border-[rgba(132,255,191,0.8)]" />
-              <div className="absolute inset-x-3 top-1/2 h-[2px] -translate-y-1/2 bg-[rgba(18,99,55,0.75)] dark:bg-[rgba(132,255,191,0.7)]" />
-              <div className="absolute inset-y-3 left-1/2 w-[2px] -translate-x-1/2 bg-[rgba(18,99,55,0.75)] dark:bg-[rgba(132,255,191,0.7)]" />
-
-              <div className="absolute left-[13%] top-[17%] rotate-[-20deg]">
-                <div className="h-12 w-8 rounded-full border-2 border-[#0f341f] bg-white/60 dark:border-[#d9ffeb] dark:bg-[#7cffb640]" />
-                <div className="mx-auto -mt-0.5 h-8 w-1.5 rounded-b-full bg-[#0f341f] dark:bg-[#d9ffeb]" />
-              </div>
-
-              <div className="absolute right-[14%] top-[56%] rotate-[18deg]">
-                <div className="h-11 w-7 rounded-full border-2 border-[#0f341f] bg-white/60 dark:border-[#d9ffeb] dark:bg-[#7cffb640]" />
-                <div className="mx-auto -mt-0.5 h-7 w-1.5 rounded-b-full bg-[#0f341f] dark:bg-[#d9ffeb]" />
-              </div>
-
-            </div>
-          </div>
+      {/* ── HERO ── */}
+      <section
+        id="home"
+        style={{
+          background:
+            "linear-gradient(150deg, rgba(29,158,117,0.10) 0%, rgba(29,158,117,0.04) 50%, transparent 100%)",
+          borderBottom: "1px solid rgba(29,158,117,0.12)",
+        }}
+      >
+        <div style={{ maxWidth: 960, margin: "0 auto", padding: "64px 24px 52px" }}>
+        <span
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            marginBottom: 16,
+            padding: "4px 12px",
+            borderRadius: 999,
+            background: "rgba(29,158,117,0.12)",
+            border: "1px solid rgba(29,158,117,0.25)",
+            fontSize: 11,
+            fontWeight: 600,
+            letterSpacing: "0.09em",
+            textTransform: "uppercase",
+            color: "#0F6E56",
+          }}
+        >
+          <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#1D9E75", display: "inline-block" }} />
+          Badminton court booking
+        </span>
+        <h1
+          style={{
+            margin: "0 0 14px",
+            fontSize: "clamp(2.2rem,5.5vw,3.4rem)",
+            fontWeight: 700,
+            lineHeight: 1.08,
+            letterSpacing: "-0.02em",
+            color: "var(--color-text-primary)",
+          }}
+        >
+          Book a court,<br />
+          <span style={{ color: "#1D9E75" }}>play today.</span>
+        </h1>
+        <p
+          style={{
+            margin: "0 0 28px",
+            fontSize: 16,
+            lineHeight: 1.65,
+            color: "var(--color-text-secondary)",
+            maxWidth: "50ch",
+          }}
+        >
+          Pick a date, choose a court, select a time slot, and submit in under
+          a minute. We&apos;ll confirm your slot shortly.
+        </p>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <a
+            href="#courts"
+            style={{
+              background: "#1D9E75",
+              color: "#04342C",
+              padding: "11px 22px",
+              borderRadius: "var(--border-radius-md)",
+              textDecoration: "none",
+              fontWeight: 500,
+              fontSize: 14,
+            }}
+          >
+            Browse courts
+          </a>
+          <Link
+            href="/customer/status"
+            style={{
+              padding: "11px 22px",
+              borderRadius: "var(--border-radius-md)",
+              border: "0.5px solid var(--color-border-secondary)",
+              color: "var(--color-text-primary)",
+              textDecoration: "none",
+              fontSize: 14,
+            }}
+          >
+            Track my booking
+          </Link>
         </div>
 
-        {statusMessage ? <p className="mt-4 mb-0 text-[0.95rem] text-[#1d5a34] dark:text-[#8affb8]">{statusMessage}</p> : null}
-        {trackingParams ? (
-          <p className="mt-2 mb-0 text-[0.9rem] text-[#1d5a34] dark:text-[#a8f4c8]">
-            Track latest booking updates:{" "}
-            <Link
-              href={`/customer/status?${trackingParams}`}
-              className="font-bold text-[#0f341f] underline underline-offset-2 hover:text-[#1b5c35] dark:text-[#dffff0] dark:hover:text-[#86ffbc]"
-            >
-              View Booking Status
-            </Link>
+        {statusMessage && (
+          <p
+            style={{
+              marginTop: 16,
+              padding: "10px 14px",
+              borderRadius: "var(--border-radius-md)",
+              background: "#E1F5EE",
+              color: "#085041",
+              fontSize: 13,
+            }}
+          >
+            {statusMessage}{" "}
+            {trackingParams && (
+              <Link
+                href={`/customer/status?${trackingParams}`}
+                style={{ color: "#0F6E56", fontWeight: 500 }}
+              >
+                View status →
+              </Link>
+            )}
           </p>
-        ) : null}
-        {errorMessage ? <p className="mt-2 mb-0 text-[0.92rem] text-[#ff9797]">{errorMessage}</p> : null}
+        )}
+        {errorMessage && !isModalOpen && (
+          <p
+            style={{
+              marginTop: 12,
+              padding: "10px 14px",
+              borderRadius: "var(--border-radius-md)",
+              background: "var(--color-background-danger)",
+              color: "var(--color-text-danger)",
+              fontSize: 13,
+            }}
+          >
+            {errorMessage}
+          </p>
+        )}
+        </div>
       </section>
 
-      <section id="courts" className="mx-auto max-w-280 px-4 pb-12 md:pb-16">
-        <div className="mb-4 flex items-end justify-between gap-4">
+      {/* ── COURTS ── */}
+      <section
+        id="courts"
+        style={{
+          maxWidth: 960,
+          margin: "0 auto",
+          padding: "40px 24px 72px",
+        }}
+      >
+        {/* Section header */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            flexWrap: "wrap",
+            gap: 12,
+            marginBottom: 20,
+          }}
+        >
           <div>
-            <p className="m-0 text-[0.78rem] font-bold uppercase tracking-[0.11em] text-[#1d5a34] dark:text-[#8dffc0]">Courts</p>
-            <h2 className="m-0 mt-1 text-[clamp(1.4rem,3vw,2rem)] text-[#0f341f] dark:text-[#e8ffee]">Choose your court</h2>
+            <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700, letterSpacing: "-0.01em", color: "var(--color-text-primary)" }}>Available courts</h2>
+            <p style={{ margin: "2px 0 0", fontSize: 13, color: "var(--color-text-secondary)" }}>Select a court below to reserve a slot</p>
           </div>
-          {isLoading ? <p className="m-0 text-sm text-[#1d5a34] dark:text-[#9fe7bf]">Refreshing...</p> : null}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+            <span style={{ color: "var(--color-text-secondary)" }}>Date:</span>
+            <input
+              type="date"
+              value={form.bookingDate}
+              min={todayISODate()}
+              onChange={(e) =>
+                setForm((prev) => ({ ...prev, bookingDate: e.target.value, startTime: "", endTime: "" }))
+              }
+              style={{
+                ...inputStyle,
+                height: 36,
+                width: "auto",
+                padding: "0 10px",
+                fontSize: 13,
+                fontWeight: 500,
+                border: "1px solid var(--color-border-secondary)",
+                borderRadius: "var(--border-radius-md)",
+                boxShadow: "0 1px 4px rgba(13,100,68,0.06)",
+              }}
+            />
+            {isLoading && (
+              <span style={{ color: "var(--color-text-secondary)", fontSize: 12 }}>
+                Refreshing…
+              </span>
+            )}
+          </div>
         </div>
 
-        {courts.length === 0 && !isLoading ? (
-          <p className="rounded-xl border border-[rgba(19,102,54,0.15)] bg-[rgba(255,255,255,0.75)] p-4 text-[#1d5a34] dark:border-[rgba(119,255,187,0.16)] dark:bg-[rgba(14,38,26,0.62)] dark:text-[#9fe7bf]">
-            No active courts found right now.
-          </p>
-        ) : null}
+        {/* Legend */}
+        <div
+          style={{
+            display: "flex",
+            gap: 16,
+            marginBottom: 20,
+            fontSize: 12,
+            color: "var(--color-text-secondary)",
+            padding: "8px 14px",
+            background: "var(--color-background-primary)",
+            border: "1px solid var(--color-border-tertiary)",
+            borderRadius: "var(--border-radius-md)",
+            width: "fit-content",
+            boxShadow: "0 1px 4px rgba(13,100,68,0.05)",
+          }}
+        >
+          <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ display: "inline-block", width: 9, height: 9, borderRadius: "50%", background: "#1D9E75", boxShadow: "0 0 0 2px rgba(29,158,117,0.2)" }} />
+            Available
+          </span>
+          <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ display: "inline-block", width: 9, height: 9, borderRadius: "50%", background: "#E24B4A", boxShadow: "0 0 0 2px rgba(226,75,74,0.2)" }} />
+            Booked
+          </span>
+          <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ display: "inline-block", width: 9, height: 9, borderRadius: "50%", background: "#F2A23B", boxShadow: "0 0 0 2px rgba(242,162,59,0.2)" }} />
+            Blocked
+          </span>
+        </div>
 
-        <ul className="grid list-none gap-4 p-0 sm:grid-cols-2 lg:grid-cols-3">
+        {courts.length === 0 && !isLoading && (
+          <p
+            style={{
+              padding: "20px 18px",
+              borderRadius: "var(--border-radius-lg)",
+              background: "var(--color-background-primary)",
+              border: "1px solid var(--color-border-tertiary)",
+              color: "var(--color-text-secondary)",
+              fontSize: 14,
+              boxShadow: "0 1px 4px rgba(13,100,68,0.05)",
+            }}
+          >
+            No active courts found for this date.
+          </p>
+        )}
+
+        {/* Court cards grid */}
+        <ul
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))",
+            gap: 12,
+            listStyle: "none",
+            padding: 0,
+            margin: 0,
+          }}
+        >
           {courts.map((court) => {
-            const courtSlotCount = bookings.filter((item) => item.courtId === court.id).length;
+            const bookedStarts = bookings
+              .filter(
+                (b) =>
+                  b.courtId === court.id &&
+                  !["EXPIRED", "CANCELLED", "DENIED"].includes(b.status)
+              )
+              .map((b) => b.startTime);
+            const courtBlocks = blockedSlots.filter((slot) => slot.courtId === court.id);
+            const blockedStarts = ALL_SLOTS.filter((slotStart) => {
+              const slotEnd = addHour(slotStart);
+              return courtBlocks.some((blocked) =>
+                rangesOverlap(slotStart, slotEnd, blocked.startTime, blocked.endTime)
+              );
+            });
+
+            const bookedCount = new Set(bookedStarts).size;
+            const blockedCount = new Set(blockedStarts).size;
+            const takenCount = new Set([
+              ...bookedStarts,
+              ...blockedStarts,
+            ]).size;
+            const totalSlots = ALL_SLOTS.length;
 
             return (
               <li key={court.id}>
-                <article className="h-full rounded-2xl border border-[rgba(19,102,54,0.15)] bg-[rgba(255,255,255,0.78)] p-4 shadow-[0_10px_30px_rgba(10,74,40,0.1)] dark:border-[rgba(119,255,187,0.16)] dark:bg-[rgba(14,38,26,0.68)] dark:shadow-none">
-                  <p className="m-0 text-xs font-bold uppercase tracking-[0.09em] text-[#1d5a34] dark:text-[#9be8be]">{court.surfaceType} surface</p>
-                  <h3 className="m-0 mt-1 text-lg font-bold text-[#0f341f] dark:text-[#effff5]">{court.name}</h3>
-                  <p className="m-0 mt-2 text-sm text-[#1d5a34] dark:text-[#b2ffd0]">{courtSlotCount} booked slot(s) on {form.bookingDate}</p>
+                <article
+                  style={{
+                    background: "var(--color-background-primary)",
+                    border: "1px solid var(--color-border-tertiary)",
+                    borderTop: `3px solid ${takenCount === totalSlots ? "#E24B4A" : "#1D9E75"}`,
+                    borderRadius: "var(--border-radius-lg)",
+                    padding: 20,
+                    height: "100%",
+                    boxSizing: "border-box",
+                    display: "flex",
+                    flexDirection: "column",
+                    boxShadow: "0 2px 16px rgba(13,100,68,0.08), 0 1px 4px rgba(13,100,68,0.04)",
+                    transition: "box-shadow 0.18s, transform 0.18s",
+                  }}
+                >
+                  <span
+                    style={{
+                      display: "inline-block",
+                      fontSize: 11,
+                      fontWeight: 500,
+                      padding: "3px 8px",
+                      borderRadius: "var(--border-radius-md)",
+                      marginBottom: 8,
+                      background: court.surfaceType === "wooden" ? "#FAEEDA" : "#E1F5EE",
+                      color: court.surfaceType === "wooden" ? "#854F0B" : "#0F6E56",
+                    }}
+                  >
+                    {court.surfaceType} surface
+                  </span>
+
+                  <h3
+                    style={{
+                      margin: "0 0 2px",
+                      fontSize: 15,
+                      fontWeight: 500,
+                      color: "var(--color-text-primary)",
+                    }}
+                  >
+                    {court.name}
+                  </h3>
+                  <p
+                    style={{
+                      margin: 0,
+                      fontSize: 12,
+                      color: "var(--color-text-secondary)",
+                    }}
+                  >
+                    {bookedCount} booked, {blockedCount} blocked ({takenCount} unavailable of {totalSlots})
+                  </p>
+
+                  <SlotDots total={totalSlots} taken={takenCount} />
+
                   <button
                     type="button"
-                    onClick={() => openReservationModal(court.id)}
-                    className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-full bg-[linear-gradient(90deg,#32cc70_0%,#5df28d_100%)] px-4 py-2.5 text-sm font-extrabold text-[#03230f] transition-transform duration-200 hover:-translate-y-px"
+                    onClick={() => openModal(court.id)}
+                    disabled={takenCount === totalSlots}
+                    style={{
+                      marginTop: "auto",
+                      width: "100%",
+                      padding: "9px",
+                      fontSize: 13,
+                      fontWeight: 500,
+                      borderRadius: "var(--border-radius-md)",
+                      border: "none",
+                      cursor: takenCount === totalSlots ? "not-allowed" : "pointer",
+                      background: takenCount === totalSlots ? "var(--color-background-tertiary)" : "#1D9E75",
+                      color: takenCount === totalSlots ? "var(--color-text-secondary)" : "#ffffff",
+                      opacity: takenCount === totalSlots ? 0.6 : 1,
+                      boxShadow: takenCount === totalSlots ? "none" : "0 2px 10px rgba(29,158,117,0.3)",
+                    }}
                   >
-                    <Image src="/assets/tab-icon.png" alt="Reserve" width={16} height={16} />
-                    Reserve This Court
+                    {takenCount === totalSlots ? "Fully booked" : "Reserve this court"}
                   </button>
                 </article>
               </li>
@@ -373,181 +984,295 @@ export default function BookingExperience() {
         </ul>
       </section>
 
-      <footer className="border-t border-[rgba(31,120,63,0.22)] bg-[rgba(245,255,250,0.75)] dark:border-[rgba(98,255,174,0.18)] dark:bg-[rgba(5,19,13,0.72)]">
-        <div className="mx-auto grid max-w-280 gap-6 px-4 py-8 sm:grid-cols-2 lg:grid-cols-3">
+      {/* ── FOOTER ── */}
+      <footer
+        style={{
+          borderTop: "1px solid #17876a",
+          background: "#1D9E75",
+        }}
+      >
+        <div
+          style={{
+            maxWidth: 960,
+            margin: "0 auto",
+            padding: "32px 24px",
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+            gap: 24,
+          }}
+        >
           <div>
-            <Image src="/assets/LOGO-NEW-SPORTSCENTER.png" alt="Sports Center logo" width={170} height={40} />
-            
+            <Image src="/assets/LOGO-NEW-SPORTSCENTER.png" alt="Sports Center" width={150} height={36} />
           </div>
-
           <div>
-            <h4 className="m-0 text-sm font-extrabold uppercase tracking-[0.09em] text-[#0f341f] dark:text-[#dffff0]">Quick Links</h4>
-            <ul className="mt-3 grid list-none gap-2 p-0 text-sm">
-              <li>
-                <a href="https://c-one.ph/#" className="text-[#1b5c35] hover:text-[#0f341f] dark:text-[#a8f4c8] dark:hover:text-[#e7fff2]">C-One Official Website</a>
-              </li>
-              <li>
-                <a href="https://c-one.ph/sports-center" className="text-[#1b5c35] hover:text-[#0f341f] dark:text-[#a8f4c8] dark:hover:text-[#e7fff2]">C-One Sport Center Website</a>
-              </li>
-              <li>
-                <Link href="https://c-one.ph/sports-center" className="text-[#1b5c35] hover:text-[#0f341f] dark:text-[#a8f4c8] dark:hover:text-[#e7fff2]">C-One Official Facebook</Link>
-              </li>
+            <h4 style={{ margin: "0 0 10px", fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: "rgba(255,255,255,0.6)" }}>
+              Quick links
+            </h4>
+            <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 6, fontSize: 13 }}>
+              <li><a href="https://c-one.ph/#" style={{ color: "rgba(255,255,255,0.85)", textDecoration: "none" }}>C-One Official Website</a></li>
+              <li><a href="https://c-one.ph/sports-center" style={{ color: "rgba(255,255,255,0.85)", textDecoration: "none" }}>Sports Center</a></li>
             </ul>
           </div>
-
           <div>
-            <h4 className="m-0 text-sm font-extrabold uppercase tracking-[0.09em] text-[#0f341f] dark:text-[#dffff0]">Contact</h4>
-            <ul className="mt-3 grid list-none gap-2 p-0 text-sm text-[#1d5a34] dark:text-[#a8f4c8]">
+            <h4 style={{ margin: "0 0 10px", fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: "rgba(255,255,255,0.6)" }}>
+              Contact
+            </h4>
+            <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 6, fontSize: 13, color: "rgba(255,255,255,0.85)" }}>
               <li>Sports Center Front Desk</li>
               <li>+63 917 123 4567</li>
               <li>booking@sportscenter.com</li>
             </ul>
           </div>
         </div>
-        <div className="border-t border-[rgba(31,120,63,0.16)] px-4 py-3 text-center text-xs text-[#1d5a34] dark:border-[rgba(98,255,174,0.14)] dark:text-[#9fe7bf]">
-          © {new Date().getFullYear()} C-One Sports Center. All rights reserved.
+        <div
+          style={{
+            borderTop: "1px solid rgba(255,255,255,0.2)",
+            padding: "10px 24px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            fontSize: 12,
+            color: "rgba(255,255,255,0.7)",
+          }}
+        >
+          <span>© {new Date().getFullYear()} C-One Sports Center. All rights reserved.</span>
+          <Link href="/customer/status" style={{ color: "#ffffff", textDecoration: "none", fontWeight: 600 }}>
+            Track my booking →
+          </Link>
         </div>
       </footer>
 
-      {isReservationModalOpen ? (
-        <div className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-[rgba(3,12,8,0.58)] p-3 sm:p-4" onClick={closeReservationModal}>
+      {/* ── RESERVATION MODAL ── */}
+      {isModalOpen && (
+        <div
+          onClick={() => setIsModalOpen(false)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 50,
+            background: "rgba(0,0,0,0.4)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+            overflowY: "auto",
+          }}
+        >
           <section
-            className="my-4 w-full max-w-xl overflow-y-auto rounded-2xl border border-[rgba(100,255,176,0.25)] bg-[rgba(5,16,11,0.94)] p-4 shadow-[0_24px_90px_rgba(4,14,10,0.7)] backdrop-blur-lg max-h-[90dvh]"
-            onClick={(event) => event.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "100%",
+              maxWidth: 560,
+              maxHeight: "90dvh",
+              overflowY: "auto",
+              background: "var(--color-background-primary)",
+              border: "1px solid var(--color-border-tertiary)",
+              borderRadius: "var(--border-radius-lg)",
+              padding: 28,
+              boxSizing: "border-box",
+              boxShadow: "0 24px 64px rgba(13,100,68,0.16), 0 4px 16px rgba(13,100,68,0.08)",
+            }}
           >
-            <div className="mb-4 flex items-start justify-between gap-3">
+            {/* Modal header */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                marginBottom: 16,
+              }}
+            >
               <div>
-                <p className="m-0 text-[0.78rem] font-bold uppercase tracking-[0.11em] text-[#8dffc0]">Reservation Modal</p>
-                <h3 className="m-0 mt-1 text-xl font-bold text-[#f4fff7]">{selectedCourt ? `Book ${selectedCourt.name}` : "Book a Court"}</h3>
+                <p style={{ margin: "0 0 2px", fontSize: 11, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.08em", color: "#0F6E56" }}>
+                  Reservation
+                </p>
+                <h3 style={{ margin: 0, fontSize: 17, fontWeight: 500 }}>
+                  {selectedCourt ? `Book ${selectedCourt.name}` : "Book a court"}
+                </h3>
               </div>
-              <button type="button" onClick={closeReservationModal} className="rounded-md px-2 py-1 text-sm font-bold text-[#baf9d4] hover:bg-[rgba(112,255,179,0.12)]">
+              <button
+                type="button"
+                onClick={() => setIsModalOpen(false)}
+                style={{
+                  background: "var(--color-background-secondary)",
+                  border: "none",
+                  borderRadius: "var(--border-radius-md)",
+                  padding: "5px 12px",
+                  fontSize: 12,
+                  color: "var(--color-text-secondary)",
+                  cursor: "pointer",
+                }}
+              >
                 Close
               </button>
             </div>
 
-            <form onSubmit={onSubmit} className="grid items-start gap-4 md:grid-cols-2 md:gap-5">
-              <div className="grid gap-[0.8rem]">
-                <label className={fieldLabelClassName}>
-                  <span>Full Name</span>
-                  <input
-                    className={inputClassName}
-                    required
-                    minLength={2}
-                    value={form.name}
-                    onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
-                    placeholder="Alex Gonzalez"
-                  />
-                </label>
+            {/* Selected slot summary */}
+            {form.startTime && (
+              <div
+                style={{
+                  background: "#E1F5EE",
+                  border: "0.5px solid #9FE1CB",
+                  borderRadius: "var(--border-radius-md)",
+                  padding: "10px 14px",
+                  marginBottom: 16,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 8,
+                }}
+              >
+                <div>
+                  <p style={{ margin: "0 0 2px", fontSize: 13, fontWeight: 500, color: "#04342C" }}>
+                    {selectedCourt?.name} · {form.bookingDate}
+                  </p>
+                  <p style={{ margin: 0, fontSize: 12, color: "#085041" }}>
+                    {formatHour(form.startTime)} – {form.endTime ? formatHour(form.endTime) : "…"}
+                  </p>
+                </div>
+                <span
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 500,
+                    padding: "3px 8px",
+                    borderRadius: "var(--border-radius-md)",
+                    background: "#1D9E75",
+                    color: "#04342C",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  Selected
+                </span>
+              </div>
+            )}
 
-                <label className={fieldLabelClassName}>
-                  <span>Contact Number</span>
+            {/* Date picker */}
+            <div style={{ marginBottom: 16 }}>
+              <p style={{ margin: "0 0 10px", fontSize: 13, fontWeight: 500, color: "var(--color-text-primary)" }}>
+                Select a date
+              </p>
+              <CalendarPicker
+                selected={form.bookingDate}
+                minDate={todayISODate()}
+                onSelect={(date) =>
+                  setForm((prev) => ({ ...prev, bookingDate: date, startTime: "", endTime: "" }))
+                }
+              />
+            </div>
+
+            {/* Timeline picker */}
+            <div style={{ marginBottom: 20 }}>
+              <p style={{ margin: "0 0 10px", fontSize: 13, fontWeight: 500, color: "var(--color-text-primary)" }}>
+                Select time
+                <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 400, color: "var(--color-text-secondary)" }}>
+                  — 8 AM – 10 PM
+                </span>
+              </p>
+              <TimelinePicker
+                startTime={form.startTime}
+                endTime={form.endTime}
+                activeBookings={activeBookingsForCourt}
+                blockedRanges={courtBlockedSlots}
+                onChange={(start, end) => setForm((p) => ({ ...p, startTime: start, endTime: end }))}
+              />
+              {form.startTime && form.endTime && hasConflict(form.startTime, form.endTime) && (
+                <p style={{ margin: "8px 0 0", fontSize: 12, color: "#dc2626" }}>
+                  This time range conflicts with an existing booking or blocked slot.
+                </p>
+              )}
+            </div>
+
+            <hr style={{ border: "none", borderTop: "0.5px solid var(--color-border-tertiary)", margin: "0 0 20px" }} />
+
+            {/* Booking form */}
+            <form onSubmit={onSubmit} style={{ display: "grid", gap: 14 }}>
+              <label style={labelStyle}>
+                Full name
+                <input
+                  style={inputStyle}
+                  required
+                  minLength={2}
+                  placeholder="Alex Gonzalez"
+                  value={form.name}
+                  onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
+                />
+              </label>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <label style={labelStyle}>
+                  Contact number
                   <input
-                    className={inputClassName}
+                    style={inputStyle}
                     required
                     minLength={7}
-                    value={form.contactNumber}
-                    onChange={(event) => setForm((prev) => ({ ...prev, contactNumber: event.target.value }))}
                     placeholder="0917 123 4567"
+                    value={form.contactNumber}
+                    onChange={(e) => setForm((p) => ({ ...p, contactNumber: e.target.value }))}
                   />
                 </label>
-
-                <label className={fieldLabelClassName}>
-                  <span>Gmail Address</span>
+                <label style={labelStyle}>
+                  Gmail address
                   <input
-                    className={inputClassName}
+                    style={inputStyle}
                     required
                     type="email"
-                    value={form.email}
-                    onChange={(event) => setForm((prev) => ({ ...prev, email: event.target.value }))}
                     placeholder="you@gmail.com"
+                    value={form.email}
+                    onChange={(e) => setForm((p) => ({ ...p, email: e.target.value }))}
                   />
                 </label>
               </div>
 
-              <div className="grid gap-[0.8rem]">
-                <label className={fieldLabelClassName}>
-                  <span>Booking Date</span>
-                  <input
-                    className={inputClassName}
-                    required
-                    type="date"
-                    value={form.bookingDate}
-                    onChange={(event) => onDateChange(event.target.value)}
-                  />
-                </label>
-
-                <label className={fieldLabelClassName}>
-                  <span>Court</span>
-                  <select
-                    className={inputClassName}
-                    required
-                    value={form.courtId}
-                    onChange={(event) => setForm((prev) => ({ ...prev, courtId: event.target.value }))}
-                  >
-                    {courts.map((court) => (
-                      <option key={court.id} value={court.id}>
-                        {court.name} ({court.surfaceType})
-                      </option>
-                    ))}
-                  </select>
-                </label>
-
-                <div className="grid grid-cols-2 gap-[0.7rem]">
-                  <label className={fieldLabelClassName}>
-                    <span>Start Time</span>
-                    <input
-                      className={inputClassName}
-                      required
-                      type="time"
-                      value={form.startTime}
-                      onChange={(event) => setForm((prev) => ({ ...prev, startTime: event.target.value }))}
-                    />
-                  </label>
-
-                  <label className={fieldLabelClassName}>
-                    <span>End Time</span>
-                    <input
-                      className={inputClassName}
-                      required
-                      type="time"
-                      value={form.endTime}
-                      onChange={(event) => setForm((prev) => ({ ...prev, endTime: event.target.value }))}
-                    />
-                  </label>
-                </div>
-
-              </div>
+              {errorMessage && (
+                <p
+                  style={{
+                    margin: 0,
+                    padding: "8px 12px",
+                    borderRadius: "var(--border-radius-md)",
+                    background: "var(--color-background-danger)",
+                    color: "var(--color-text-danger)",
+                    fontSize: 13,
+                  }}
+                >
+                  {errorMessage}
+                </p>
+              )}
 
               <button
                 type="submit"
-                disabled={isSubmitting || isLoading}
-                className="mt-1 cursor-pointer rounded-full border-none bg-[linear-gradient(90deg,#32cc70_0%,#5df28d_100%)] px-4 py-3 text-[0.95rem] font-extrabold text-[#03230f] transition-[transform,box-shadow,opacity] duration-200 ease-in hover:-translate-y-px hover:shadow-[0_10px_26px_rgba(50,204,112,0.36)] disabled:cursor-not-allowed disabled:opacity-55 md:col-span-2"
+                disabled={isSubmitting || !form.startTime || !form.endTime}
+                style={{
+                  width: "100%",
+                  padding: "13px",
+                  fontSize: 14,
+                  fontWeight: 600,
+                  borderRadius: "var(--border-radius-md)",
+                  border: "none",
+                  cursor: isSubmitting || !form.startTime || !form.endTime ? "not-allowed" : "pointer",
+                  background: !form.startTime || !form.endTime ? "var(--color-background-tertiary)" : "#1D9E75",
+                  color: !form.startTime || !form.endTime ? "var(--color-text-secondary)" : "#ffffff",
+                  opacity: isSubmitting ? 0.6 : 1,
+                  transition: "background 0.15s, box-shadow 0.15s",
+                  boxShadow: !form.startTime || !form.endTime ? "none" : "0 3px 14px rgba(29,158,117,0.35)",
+                }}
               >
-                {isSubmitting ? "Submitting..." : "Request Booking"}
+                {isSubmitting ? "Submitting…" : !form.startTime || !form.endTime ? "Select a time range first" : "Submit reservation request"}
               </button>
-            </form>
 
-            <h4 className="mt-5 mb-0 text-sm font-bold text-[#ccffdf]">Booked Slots for Selected Court</h4>
-            {courtBookings.length === 0 ? (
-              <p className="mt-2 mb-0 text-[0.9rem] text-[#9fe7bf]">No bookings yet for this date and court.</p>
-            ) : (
-              <ul className="mt-2 grid list-none gap-[0.55rem] p-0">
-                {courtBookings.map((booking) => (
-                  <li
-                    key={booking.id}
-                    className="flex items-center justify-between rounded-[0.8rem] border border-[rgba(119,255,187,0.16)] bg-[rgba(14,38,26,0.62)] px-3 py-[0.68rem] text-[#d6ffe7]"
-                  >
-                    <span>
-                      {booking.startTime} - {booking.endTime}
-                    </span>
-                    <strong>{booking.status}</strong>
-                  </li>
-                ))}
-              </ul>
-            )}
+              <p
+                style={{
+                  margin: 0,
+                  textAlign: "center",
+                  fontSize: 12,
+                  color: "var(--color-text-secondary)",
+                }}
+              >
+                Pending admin approval · confirmation sent to your email
+              </p>
+            </form>
           </section>
         </div>
-      ) : null}
+      )}
     </div>
   );
 }

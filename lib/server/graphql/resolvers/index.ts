@@ -8,6 +8,9 @@ import { BookingModel } from "@/lib/server/graphql/models/Booking";
 import { CustomerModel } from "@/lib/server/graphql/models/Customer";
 import { CourtModel } from "@/lib/server/graphql/models/Court";
 import { AbuseLogModel } from "@/lib/server/graphql/models/AbuseLog";
+import { BlockedSlotModel } from "@/lib/server/graphql/models/BlockedSlot";
+import { findOverlappingBlockedSlot } from "@/lib/server/graphql/lib/blocked-slots";
+import { triggerBookingsUpdated } from "@/lib/server/pusher-server";
 import { EVENTS } from "@/lib/server/graphql/lib/events";
 import { pubSub } from "@/lib/server/graphql/lib/pubsub";
 import {
@@ -65,6 +68,19 @@ export const resolvers = {
 
       return BookingModel.find(query).sort({ createdAt: -1 }).populate("customer");
     },
+    blockedSlots: async (_parent: unknown, args: { bookingDate?: string; courtId?: string }) => {
+      const query: Record<string, unknown> = {};
+
+      if (args.bookingDate) {
+        query.bookingDate = args.bookingDate;
+      }
+
+      if (args.courtId) {
+        query.courtId = args.courtId;
+      }
+
+      return BlockedSlotModel.find(query).sort({ bookingDate: 1, startTime: 1, createdAt: -1 });
+    },
     courts: async () => {
       return CourtModel.find({ status: "active" }).sort({ name: 1 });
     },
@@ -111,6 +127,19 @@ export const resolvers = {
         if (!court) {
           throw new GraphQLError("Court not found or inactive", {
             extensions: { code: "BAD_USER_INPUT" },
+          });
+        }
+
+        const blockedSlot = await findOverlappingBlockedSlot({
+          courtId: parsed.courtId,
+          bookingDate: parsed.bookingDate,
+          startTime: parsed.startTime,
+          endTime: parsed.endTime,
+        });
+
+        if (blockedSlot) {
+          throw new GraphQLError("This slot is blocked and cannot be booked", {
+            extensions: { code: "CONFLICT" },
           });
         }
 
@@ -205,6 +234,11 @@ export const resolvers = {
           bookingCreated: populated,
         });
 
+        await triggerBookingsUpdated({
+          bookingId: String(booking._id),
+          action: "created",
+        });
+
         return populated;
       } catch (error) {
         throw toGraphQLError(error);
@@ -264,6 +298,11 @@ export const resolvers = {
           bookingUpdated: populated,
         });
 
+        await triggerBookingsUpdated({
+          bookingId: parsed.bookingId,
+          action: "updated",
+        });
+
         return populated;
       } catch (error) {
         throw toGraphQLError(error);
@@ -293,6 +332,11 @@ export const resolvers = {
 
         await pubSub.publish(EVENTS.BOOKING_UPDATED, {
           bookingUpdated: populated,
+        });
+
+        await triggerBookingsUpdated({
+          bookingId: parsed.bookingId,
+          action: "updated",
         });
 
         return populated;
