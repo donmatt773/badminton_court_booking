@@ -56,12 +56,6 @@ type BookingInput = {
   paymentProofImage: string;
 };
 
-type LastSubmitted = {
-  email: string;
-  bookingDate: string;
-  bookingId: string;
-};
-
 // ---------------------------------------------------------------------------
 // Time configuration
 // ---------------------------------------------------------------------------
@@ -347,7 +341,6 @@ function CalendarPicker({
 export default function BookingExperience() {
   const [submissionErrorMessage, setSubmissionErrorMessage] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
-  const [lastSubmitted, setLastSubmitted] = useState<LastSubmitted | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [reservationStep, setReservationStep] = useState<1 | 2>(1);
 
@@ -418,15 +411,6 @@ export default function BookingExperience() {
     () => courts.find((c) => c.id === form.courtId) ?? null,
     [courts, form.courtId]
   );
-
-  const trackingParams = useMemo(() => {
-    if (!lastSubmitted) return "";
-    return new URLSearchParams({
-      email: lastSubmitted.email,
-      date: lastSubmitted.bookingDate,
-      bookingId: lastSubmitted.bookingId,
-    }).toString();
-  }, [lastSubmitted]);
 
   useEffect(() => {
     setForm((prev) => {
@@ -544,7 +528,6 @@ export default function BookingExperience() {
         throw new Error("Booking could not be submitted.");
       }
       setStatusMessage("Reservation submitted! Your slot is pending admin approval.");
-      setLastSubmitted({ email: form.email, bookingDate: form.bookingDate, bookingId: createdBooking.id });
       setIsModalOpen(false);
       await refetch();
     } catch (error) {
@@ -610,12 +593,6 @@ export default function BookingExperience() {
         <div style={{ display: "flex", alignItems: "center", gap: 20, fontSize: 13 }}>
           <a href="#home" style={{ color: "rgba(255,255,255,0.85)", textDecoration: "none" }}>Home</a>
           <a href="#courts" style={{ color: "rgba(255,255,255,0.85)", textDecoration: "none" }}>Courts</a>
-          <Link
-            href="/customer/status"
-            style={{ color: "rgba(255,255,255,0.85)", textDecoration: "none" }}
-          >
-            Track booking
-          </Link>
           <a
             href="#courts"
             style={{
@@ -720,19 +697,6 @@ export default function BookingExperience() {
           >
             Browse courts
           </a>
-          <Link
-            href="/customer/status"
-            style={{
-              padding: "11px 22px",
-              borderRadius: "var(--border-radius-md)",
-              border: "0.5px solid var(--color-border-secondary)",
-              color: "var(--color-text-primary)",
-              textDecoration: "none",
-              fontSize: 14,
-            }}
-          >
-            Track my booking
-          </Link>
         </div>
 
         {statusMessage && (
@@ -746,15 +710,7 @@ export default function BookingExperience() {
               fontSize: 13,
             }}
           >
-            {statusMessage}{" "}
-            {trackingParams && (
-              <Link
-                href={`/customer/status?${trackingParams}`}
-                style={{ color: "#6EE7B7", fontWeight: 500 }}
-              >
-                View status →
-              </Link>
-            )}
+            {statusMessage}
           </p>
         )}
         {errorMessage && !isModalOpen && (
@@ -1053,9 +1009,6 @@ export default function BookingExperience() {
           }}
         >
           <span>© {new Date().getFullYear()} C-One Sports Center. All rights reserved.</span>
-          <Link href="/customer/status" style={{ color: "#ffffff", textDecoration: "none", fontWeight: 600 }}>
-            Track my booking →
-          </Link>
         </div>
       </footer>
 
