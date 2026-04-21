@@ -75,3 +75,15 @@ Realtime channels:
 
 - `court-bookings`
 - `court-blocked-slots`
+
+## Recent Updates
+
+- Customer reservation modal is now a compact 2-step flow:
+	- Step 1: date and time selection
+	- Step 2: customer details and payment method
+- Customer time selection supports minute precision (for example, 4:20) instead of hourly-only slot picking.
+- Past-time booking prevention is enforced for today on customer, receptionist, and admin booking flows.
+- Receptionist cash payment flow now validates required amount:
+	- Cash received cannot be below required booking total.
+	- If cash is above required total, a receipt preview modal is shown and must be confirmed.
+- Receptionist receipt preview includes a standard structured layout with receipt number, date/time, customer, court, schedule, required amount, amount paid, and change.

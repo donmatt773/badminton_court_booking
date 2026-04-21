@@ -9,6 +9,7 @@ const createSchema = z.object({
   name: z.string().min(2),
   surfaceType: z.enum(["wooden", "rubber"]),
   status: z.enum(["active", "inactive", "maintenance"]).optional(),
+  price: z.coerce.number().min(0).optional(),
 });
 
 export async function GET(): Promise<Response> {
@@ -33,7 +34,10 @@ export async function GET(): Promise<Response> {
 export async function POST(request: Request): Promise<Response> {
   try {
     await ensureGraphQLRuntimeStarted();
-    await requireAdminSession();
+    const session = await requireAdminSession();
+    if (session.role !== "ADMIN") {
+      return Response.json({ error: { message: "Forbidden" } }, { status: 403 });
+    }
 
     const body = createSchema.parse(await request.json());
 
@@ -41,6 +45,7 @@ export async function POST(request: Request): Promise<Response> {
       name: body.name,
       surfaceType: body.surfaceType,
       status: body.status ?? "active",
+      price: body.price ?? 0,
     });
 
     void triggerCourtsUpdated();

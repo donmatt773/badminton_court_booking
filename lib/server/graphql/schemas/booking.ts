@@ -14,6 +14,8 @@ export const createBookingSchema = z.object({
   bookingDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "bookingDate must be YYYY-MM-DD"),
   startTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "startTime must be HH:mm"),
   endTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "endTime must be HH:mm"),
+  paymentMethod: z.enum(["cash", "online"]).optional(),
+  paymentProofImage: z.string().max(4_000_000).optional(),
 });
 
 export const updateBookingStatusSchema = z.object({

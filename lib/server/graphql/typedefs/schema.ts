@@ -9,6 +9,8 @@ export const typeDefs = `#graphql
     EXPIRED
     CANCELLED
     DENIED
+    COMPLETE
+    ARCHIVED
   }
 
   enum StaffRole {
@@ -51,7 +53,10 @@ export const typeDefs = `#graphql
     startTime: String!
     endTime: String!
     status: BookingStatus!
+    isArchived: Boolean
     paymentReference: String
+    paymentMethod: String
+    paymentProofImage: String
     denialReason: String
     expiresAt: String!
     createdAt: String!
@@ -63,6 +68,7 @@ export const typeDefs = `#graphql
     name: String!
     surfaceType: CourtSurfaceType!
     status: CourtStatus!
+    price: Float!
     createdAt: String!
     updatedAt: String!
   }
@@ -106,6 +112,8 @@ export const typeDefs = `#graphql
     bookingDate: String!
     startTime: String!
     endTime: String!
+    paymentMethod: String
+    paymentProofImage: String
   }
 
   type Query {

@@ -13,6 +13,7 @@ type Court = {
   name: string;
   surfaceType: "wooden" | "rubber";
   status: "active" | "inactive" | "maintenance";
+  price: number;
 };
 
 type Booking = {
@@ -21,6 +22,7 @@ type Booking = {
   bookingDate: string;
   startTime: string;
   endTime: string;
+  isArchived?: boolean;
   status:
     | "PENDING"
     | "CONFIRMED"
@@ -28,7 +30,9 @@ type Booking = {
     | "APPROVED"
     | "EXPIRED"
     | "CANCELLED"
-    | "DENIED";
+    | "DENIED"
+    | "COMPLETE"
+    | "ARCHIVED";
 };
 
 type BlockedSlot = {
@@ -48,6 +52,8 @@ type BookingInput = {
   bookingDate: string;
   startTime: string;
   endTime: string;
+  paymentMethod: "cash" | "online";
+  paymentProofImage: string;
 };
 
 type LastSubmitted = {
@@ -76,10 +82,10 @@ const ALL_HOURS = generateHours();
 const ALL_SLOTS = ALL_HOURS.slice(0, -1); // start hours only (8-21)
 
 function formatHour(hhmm: string): string {
-  const [h] = hhmm.split(":").map(Number);
-  if (isNaN(h)) return hhmm;
+  const [h, m] = hhmm.split(":").map(Number);
+  if (isNaN(h) || isNaN(m)) return hhmm;
   const hour = h % 12 === 0 ? 12 : h % 12;
-  return `${hour}:00 ${h < 12 ? "AM" : "PM"}`;
+  return `${hour}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`;
 }
 
 function addHour(hhmm: string, delta = 1): string {
@@ -87,8 +93,30 @@ function addHour(hhmm: string, delta = 1): string {
   return `${String(h + delta).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
+function addMinutes(hhmm: string, delta = 1): string {
+  const [h, m] = hhmm.split(":").map(Number);
+  if (isNaN(h) || isNaN(m)) return hhmm;
+  const total = h * 60 + m + delta;
+  const nextHour = Math.floor(total / 60);
+  const nextMinute = total % 60;
+  return `${String(nextHour).padStart(2, "0")}:${String(nextMinute).padStart(2, "0")}`;
+}
+
+function currentTimeHHMM(): string {
+  const now = new Date();
+  const hours = String(now.getHours()).padStart(2, "0");
+  const minutes = String(now.getMinutes()).padStart(2, "0");
+  return `${hours}:${minutes}`;
+}
+
 function rangesOverlap(startA: string, endA: string, startB: string, endB: string): boolean {
   return startA < endB && endA > startB;
+}
+
+function toMinutes(hhmm: string): number {
+  const [h, m] = hhmm.split(":").map(Number);
+  if (isNaN(h) || isNaN(m)) return 0;
+  return h * 60 + m;
 }
 
 // ---------------------------------------------------------------------------
@@ -101,6 +129,7 @@ const COURTS_AND_BOOKINGS_QUERY = gql`
       name
       surfaceType
       status
+      price
     }
     bookings(bookingDate: $bookingDate) {
       id
@@ -130,16 +159,44 @@ const CREATE_BOOKING_MUTATION = gql`
       startTime
       endTime
       courtId
+      paymentMethod
     }
   }
 `;
 
 function todayISODate(): string {
-  return new Date().toISOString().slice(0, 10);
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function getErrorMessage(error: unknown, fallback: string): string {
-  if (error instanceof Error && error.message) return error.message;
+  if (error instanceof Error && error.message) {
+    const message = error.message.trim();
+
+    if (message.startsWith("[") && message.endsWith("]")) {
+      try {
+        const issues = JSON.parse(message) as Array<{ message?: string; path?: string[] }>;
+        const parsedMessage = issues
+          .map((issue) => {
+            const field = issue.path?.[0];
+            return field && issue.message ? `${field}: ${issue.message}` : issue.message;
+          })
+          .filter((value): value is string => Boolean(value))
+          .join(". ");
+
+        if (parsedMessage) {
+          return parsedMessage;
+        }
+      } catch {
+        return message;
+      }
+    }
+
+    return message;
+  }
   return fallback;
 }
 
@@ -159,7 +216,7 @@ function SlotDots({ total, taken }: { total: number; taken: number }) {
             width: 8,
             height: 8,
             borderRadius: "50%",
-            background: i < taken ? "#E24B4A" : "#1D9E75",
+            background: i < taken ? "#EF4444" : "#10B981",
             flexShrink: 0,
           }}
         />
@@ -215,20 +272,20 @@ function CalendarPicker({
 
   return (
     <div style={{ userSelect: "none" }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
         <button
           type="button"
           onClick={prevMonth}
           disabled={!canGoPrev}
           style={{
             background: "none", border: "1px solid var(--color-border-secondary)",
-            borderRadius: 6, width: 28, height: 28,
+            borderRadius: 6, width: 24, height: 24,
             cursor: canGoPrev ? "pointer" : "not-allowed",
-            fontSize: 16, color: canGoPrev ? "var(--color-text-primary)" : "#ccc",
+            fontSize: 14, color: canGoPrev ? "var(--color-text-primary)" : "#ccc",
             display: "flex", alignItems: "center", justifyContent: "center",
           }}
         >‹</button>
-        <span style={{ fontSize: 13, fontWeight: 600, color: "var(--color-text-primary)" }}>
+        <span style={{ fontSize: 12, fontWeight: 600, color: "var(--color-text-primary)" }}>
           {MONTH_NAMES[viewMonth]} {viewYear}
         </span>
         <button
@@ -236,20 +293,20 @@ function CalendarPicker({
           onClick={nextMonth}
           style={{
             background: "none", border: "1px solid var(--color-border-secondary)",
-            borderRadius: 6, width: 28, height: 28, cursor: "pointer",
-            fontSize: 16, color: "var(--color-text-primary)",
+            borderRadius: 6, width: 24, height: 24, cursor: "pointer",
+            fontSize: 14, color: "var(--color-text-primary)",
             display: "flex", alignItems: "center", justifyContent: "center",
           }}
         >›</button>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", textAlign: "center", marginBottom: 4 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", textAlign: "center", marginBottom: 2 }}>
         {DAY_LABELS.map((d) => (
-          <span key={d} style={{ fontSize: 10, fontWeight: 600, color: "var(--color-text-secondary)", padding: "2px 0" }}>
+          <span key={d} style={{ fontSize: 9, fontWeight: 600, color: "var(--color-text-secondary)", padding: "1px 0" }}>
             {d}
           </span>
         ))}
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 2 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 1 }}>
         {cells.map((day, idx) => {
           if (!day) return <span key={idx} />;
           const dateStr = `${viewYear}-${String(viewMonth + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
@@ -263,13 +320,13 @@ function CalendarPicker({
               disabled={isPast}
               onClick={() => !isPast && onSelect(dateStr)}
               style={{
-                padding: "7px 2px",
-                fontSize: 12,
+                padding: "6px 2px",
+                fontSize: 11,
                 textAlign: "center",
                 borderRadius: 6,
-                border: isToday && !isSelected ? "1px solid #1D9E75" : "1px solid transparent",
-                background: isSelected ? "#1D9E75" : "transparent",
-                color: isSelected ? "#fff" : isPast ? "#d0d0d0" : "var(--color-text-primary)",
+                border: isToday && !isSelected ? "1px solid #10B981" : "1px solid transparent",
+                background: isSelected ? "#10B981" : "transparent",
+                color: isSelected ? "#fff" : isPast ? "#4B5563" : "var(--color-text-primary)",
                 cursor: isPast ? "default" : "pointer",
                 fontWeight: isSelected || isToday ? 600 : 400,
                 transition: "background 0.1s",
@@ -285,111 +342,6 @@ function CalendarPicker({
 }
 
 // ---------------------------------------------------------------------------
-// TimelinePicker sub-component
-// ---------------------------------------------------------------------------
-function formatHourShort(hhmm: string): string {
-  const [h] = hhmm.split(":").map(Number);
-  if (isNaN(h)) return hhmm;
-  const hour = h % 12 === 0 ? 12 : h % 12;
-  return `${hour}${h < 12 ? "a" : "p"}`;
-}
-
-function TimelinePicker({
-  startTime,
-  endTime,
-  activeBookings,
-  blockedRanges,
-  onChange,
-}: {
-  startTime: string;
-  endTime: string;
-  activeBookings: Array<{ startTime: string; endTime: string }>;
-  blockedRanges: Array<{ startTime: string; endTime: string }>;
-  onChange: (start: string, end: string) => void;
-}) {
-  function handleClick(hour: string) {
-    const next = addHour(hour);
-    if (activeBookings.some((b) => rangesOverlap(hour, next, b.startTime, b.endTime))) return;
-    if (blockedRanges.some((b) => rangesOverlap(hour, next, b.startTime, b.endTime))) return;
-    if (!startTime || (startTime && endTime)) {
-      onChange(hour, "");
-    } else if (hour <= startTime) {
-      onChange(hour, "");
-    } else {
-      onChange(startTime, addHour(hour));
-    }
-  }
-
-  function getSegmentState(hour: string): "booked" | "blocked" | "selected" | "pending-start" | "available" {
-    const next = addHour(hour);
-    if (activeBookings.some((b) => rangesOverlap(hour, next, b.startTime, b.endTime))) return "booked";
-    if (blockedRanges.some((b) => rangesOverlap(hour, next, b.startTime, b.endTime))) return "blocked";
-    if (startTime && !endTime && hour === startTime) return "pending-start";
-    if (startTime && endTime && hour >= startTime && next <= endTime) return "selected";
-    return "available";
-  }
-
-  return (
-    <div>
-      <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: "1px solid var(--color-border-secondary)" }}>
-        {ALL_SLOTS.map((hour, i) => {
-          const state = getSegmentState(hour);
-          const isUnavailable = state === "booked" || state === "blocked";
-          const isActive = state === "selected" || state === "pending-start";
-          return (
-            <button
-              key={hour}
-              type="button"
-              disabled={isUnavailable}
-              title={`${formatHour(hour)}${state === "booked" ? " · booked" : state === "blocked" ? " · blocked" : ""}`}
-              onClick={() => handleClick(hour)}
-              style={{
-                flex: 1,
-                minWidth: 0,
-                padding: "10px 0",
-                background: isActive ? "#1D9E75" : state === "booked" ? "#FDE7E7" : state === "blocked" ? "#FFF4E0" : "#f8faf9",
-                color: isActive ? "#ffffff" : state === "booked" ? "#8F2D2D" : state === "blocked" ? "#8A5208" : "var(--color-text-secondary)",
-                border: "none",
-                borderLeft: i > 0 ? "1px solid rgba(0,0,0,0.07)" : "none",
-                cursor: isUnavailable ? "not-allowed" : "pointer",
-                fontSize: 9,
-                textAlign: "center",
-                fontWeight: isActive ? 600 : 400,
-                textDecoration: isUnavailable ? "line-through" : "none",
-                transition: "background 0.1s",
-                overflow: "hidden",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {formatHourShort(hour)}
-            </button>
-          );
-        })}
-      </div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6 }}>
-        <div style={{ display: "flex", gap: 10, fontSize: 10, color: "var(--color-text-secondary)" }}>
-          <span style={{ display: "flex", alignItems: "center", gap: 3 }}>
-            <span style={{ width: 8, height: 8, background: "#FDE7E7", border: "1px solid #F3B4B4", borderRadius: 2, display: "inline-block" }} />
-            Booked
-          </span>
-          <span style={{ display: "flex", alignItems: "center", gap: 3 }}>
-            <span style={{ width: 8, height: 8, background: "#FFF4E0", border: "1px dashed #EAB773", borderRadius: 2, display: "inline-block" }} />
-            Blocked
-          </span>
-        </div>
-        <span style={{ fontSize: 11, fontWeight: 500, color: startTime ? "#0F6E56" : "var(--color-text-secondary)" }}>
-          {!startTime
-            ? "Click a segment to set start"
-            : !endTime
-            ? `${formatHour(startTime)} — click to set end`
-            : `${formatHour(startTime)} – ${formatHour(endTime)}`}
-        </span>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
 export default function BookingExperience() {
@@ -397,6 +349,7 @@ export default function BookingExperience() {
   const [statusMessage, setStatusMessage] = useState("");
   const [lastSubmitted, setLastSubmitted] = useState<LastSubmitted | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [reservationStep, setReservationStep] = useState<1 | 2>(1);
 
   const [form, setForm] = useState<BookingInput>({
     name: "",
@@ -406,6 +359,8 @@ export default function BookingExperience() {
     bookingDate: todayISODate(),
     startTime: "",
     endTime: "",
+    paymentMethod: "cash",
+    paymentProofImage: "",
   });
 
   const {
@@ -438,7 +393,8 @@ export default function BookingExperience() {
       bookings.filter(
         (b) =>
           b.courtId === form.courtId &&
-          !['EXPIRED', 'CANCELLED', 'DENIED'].includes(b.status)
+          !['EXPIRED', 'CANCELLED', 'DENIED', 'ARCHIVED'].includes(b.status) &&
+          !b.isArchived
       ),
     [bookings, form.courtId]
   );
@@ -524,24 +480,57 @@ export default function BookingExperience() {
 
   // -------------------------------------------------------------------------
   function openModal(courtId: string) {
-    setForm((prev) => ({ ...prev, courtId, startTime: "", endTime: "" }));
+    setForm((prev) => ({ ...prev, courtId, startTime: "", endTime: "", paymentMethod: "cash", paymentProofImage: "" }));
     setStatusMessage("");
     setSubmissionErrorMessage("");
+    setReservationStep(1);
     setIsModalOpen(true);
+  }
+
+  function validateStepOne(): string | null {
+    if (!form.startTime || !form.endTime) {
+      return "Please select both a time in and time out.";
+    }
+    if (form.startTime >= form.endTime) {
+      return "Time out must be after time in.";
+    }
+    if (form.bookingDate === todayISODate() && form.startTime < currentTimeHHMM()) {
+      return "You cannot select a past time.";
+    }
+    if (form.startTime < `${String(SLOT_START_HOUR).padStart(2, "0")}:00` || form.endTime > `${String(SLOT_END_HOUR).padStart(2, "0")}:00`) {
+      return "Selected time must be within operating hours (8:00 AM - 10:00 PM).";
+    }
+    if (hasConflict(form.startTime, form.endTime)) {
+      return "That time range overlaps an existing booking or blocked slot. Please choose a different time.";
+    }
+
+    return null;
+  }
+
+  function goToPaymentStep(): void {
+    const error = validateStepOne();
+    if (error) {
+      setSubmissionErrorMessage(error);
+      return;
+    }
+
+    setSubmissionErrorMessage("");
+    setReservationStep(2);
   }
 
   async function onSubmit(e: FormEvent<HTMLFormElement>): Promise<void> {
     e.preventDefault();
-    if (!form.startTime || !form.endTime) {
-      setSubmissionErrorMessage("Please select both a time in and time out.");
+    if (reservationStep !== 2) {
       return;
     }
-    if (form.startTime >= form.endTime) {
-      setSubmissionErrorMessage("Time out must be after time in.");
+
+    const stepOneError = validateStepOne();
+    if (stepOneError) {
+      setSubmissionErrorMessage(stepOneError);
       return;
     }
-    if (hasConflict(form.startTime, form.endTime)) {
-      setSubmissionErrorMessage("That time range overlaps an existing booking or blocked slot. Please choose a different time.");
+    if (form.paymentMethod === "online" && !form.paymentProofImage) {
+      setSubmissionErrorMessage("Please upload a screenshot of your online payment.");
       return;
     }
     setSubmissionErrorMessage("");
@@ -592,9 +581,9 @@ export default function BookingExperience() {
       style={{
         minHeight: "100dvh",
         background:
-          "radial-gradient(ellipse 90% 55% at 70% -5%, rgba(29,158,117,0.13) 0%, transparent 55%)," +
-          "radial-gradient(ellipse 60% 45% at -5% 55%, rgba(29,158,117,0.09) 0%, transparent 50%)," +
-          "#f6fbf8",
+          "radial-gradient(ellipse 90% 55% at 70% -5%, rgba(16,185,129,0.12) 0%, transparent 55%)," +
+          "radial-gradient(ellipse 60% 45% at -5% 55%, rgba(52,211,153,0.07) 0%, transparent 50%)," +
+          "#0B0F1A",
         color: "var(--color-text-primary)",
         fontFamily: "var(--font-sans)",
       }}
@@ -609,9 +598,10 @@ export default function BookingExperience() {
           alignItems: "center",
           justifyContent: "space-between",
           padding: "10px 24px",
-          background: "#1D9E75",
-          borderBottom: "1px solid #17876a",
-          boxShadow: "0 2px 12px rgba(13,100,68,0.18)",
+          background: "rgba(11,15,26,0.92)",
+          borderBottom: "1px solid rgba(255,255,255,0.08)",
+          backdropFilter: "blur(12px)",
+          boxShadow: "0 2px 16px rgba(0,0,0,0.4)",
         }}
       >
         <a href="#home" style={{ display: "inline-flex" }}>
@@ -641,6 +631,21 @@ export default function BookingExperience() {
           >
             Reserve a court
           </a>
+          <Link
+            href="/login"
+            style={{
+              padding: "8px 16px",
+              borderRadius: "var(--border-radius-md)",
+              border: "1px solid rgba(255,255,255,0.25)",
+              color: "rgba(255,255,255,0.85)",
+              textDecoration: "none",
+              fontWeight: 500,
+              fontSize: 13,
+              transition: "background 0.15s",
+            }}
+          >
+            Login
+          </Link>
         </div>
       </nav>
 
@@ -649,8 +654,8 @@ export default function BookingExperience() {
         id="home"
         style={{
           background:
-            "linear-gradient(150deg, rgba(29,158,117,0.10) 0%, rgba(29,158,117,0.04) 50%, transparent 100%)",
-          borderBottom: "1px solid rgba(29,158,117,0.12)",
+            "linear-gradient(150deg, rgba(16,185,129,0.08) 0%, rgba(52,211,153,0.04) 50%, transparent 100%)",
+          borderBottom: "1px solid rgba(16,185,129,0.10)",
         }}
       >
         <div style={{ maxWidth: 960, margin: "0 auto", padding: "64px 24px 52px" }}>
@@ -662,16 +667,16 @@ export default function BookingExperience() {
             marginBottom: 16,
             padding: "4px 12px",
             borderRadius: 999,
-            background: "rgba(29,158,117,0.12)",
-            border: "1px solid rgba(29,158,117,0.25)",
+            background: "rgba(16,185,129,0.12)",
+            border: "1px solid rgba(16,185,129,0.25)",
             fontSize: 11,
             fontWeight: 600,
             letterSpacing: "0.09em",
             textTransform: "uppercase",
-            color: "#0F6E56",
+            color: "#A7F3D0",
           }}
         >
-          <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#1D9E75", display: "inline-block" }} />
+          <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#10B981", display: "inline-block" }} />
           Badminton court booking
         </span>
         <h1
@@ -685,7 +690,7 @@ export default function BookingExperience() {
           }}
         >
           Book a court,<br />
-          <span style={{ color: "#1D9E75" }}>play today.</span>
+          <span style={{ background: "linear-gradient(90deg, #10B981, #34D399)", WebkitBackgroundClip: "text", backgroundClip: "text", WebkitTextFillColor: "transparent", color: "transparent", display: "inline" }}>play today.</span>
         </h1>
         <p
           style={{
@@ -703,13 +708,14 @@ export default function BookingExperience() {
           <a
             href="#courts"
             style={{
-              background: "#1D9E75",
-              color: "#04342C",
+              background: "linear-gradient(135deg, #10B981, #059669)",
+              color: "#ffffff",
               padding: "11px 22px",
               borderRadius: "var(--border-radius-md)",
               textDecoration: "none",
               fontWeight: 500,
               fontSize: 14,
+              boxShadow: "0 2px 12px rgba(16,185,129,0.4)",
             }}
           >
             Browse courts
@@ -735,8 +741,8 @@ export default function BookingExperience() {
               marginTop: 16,
               padding: "10px 14px",
               borderRadius: "var(--border-radius-md)",
-              background: "#E1F5EE",
-              color: "#085041",
+              background: "rgba(16,185,129,0.12)",
+              color: "#A7F3D0",
               fontSize: 13,
             }}
           >
@@ -744,7 +750,7 @@ export default function BookingExperience() {
             {trackingParams && (
               <Link
                 href={`/customer/status?${trackingParams}`}
-                style={{ color: "#0F6E56", fontWeight: 500 }}
+                style={{ color: "#6EE7B7", fontWeight: 500 }}
               >
                 View status →
               </Link>
@@ -838,7 +844,7 @@ export default function BookingExperience() {
           }}
         >
           <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span style={{ display: "inline-block", width: 9, height: 9, borderRadius: "50%", background: "#1D9E75", boxShadow: "0 0 0 2px rgba(29,158,117,0.2)" }} />
+            <span style={{ display: "inline-block", width: 9, height: 9, borderRadius: "50%", background: "#10B981", boxShadow: "0 0 0 2px rgba(16,185,129,0.25)" }} />
             Available
           </span>
           <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -883,7 +889,8 @@ export default function BookingExperience() {
               .filter(
                 (b) =>
                   b.courtId === court.id &&
-                  !["EXPIRED", "CANCELLED", "DENIED"].includes(b.status)
+                  !["EXPIRED", "CANCELLED", "DENIED", "ARCHIVED"].includes(b.status) &&
+                  !b.isArchived
               )
               .map((b) => b.startTime);
             const courtBlocks = blockedSlots.filter((slot) => slot.courtId === court.id);
@@ -908,14 +915,14 @@ export default function BookingExperience() {
                   style={{
                     background: "var(--color-background-primary)",
                     border: "1px solid var(--color-border-tertiary)",
-                    borderTop: `3px solid ${takenCount === totalSlots ? "#E24B4A" : "#1D9E75"}`,
+                    borderTop: `3px solid ${takenCount === totalSlots ? "#EF4444" : "#10B981"}`,
                     borderRadius: "var(--border-radius-lg)",
                     padding: 20,
                     height: "100%",
                     boxSizing: "border-box",
                     display: "flex",
                     flexDirection: "column",
-                    boxShadow: "0 2px 16px rgba(13,100,68,0.08), 0 1px 4px rgba(13,100,68,0.04)",
+                    boxShadow: takenCount === totalSlots ? "none" : "0 2px 20px rgba(16,185,129,0.08), 0 1px 4px rgba(0,0,0,0.2)",
                     transition: "box-shadow 0.18s, transform 0.18s",
                   }}
                 >
@@ -927,8 +934,8 @@ export default function BookingExperience() {
                       padding: "3px 8px",
                       borderRadius: "var(--border-radius-md)",
                       marginBottom: 8,
-                      background: court.surfaceType === "wooden" ? "#FAEEDA" : "#E1F5EE",
-                      color: court.surfaceType === "wooden" ? "#854F0B" : "#0F6E56",
+                      background: court.surfaceType === "wooden" ? "rgba(245,158,11,0.15)" : "rgba(16,185,129,0.12)",
+                      color: court.surfaceType === "wooden" ? "#FCD34D" : "#A7F3D0",
                     }}
                   >
                     {court.surfaceType} surface
@@ -944,6 +951,16 @@ export default function BookingExperience() {
                   >
                     {court.name}
                   </h3>
+                  <p
+                    style={{
+                      margin: "0 0 4px",
+                      fontSize: 13,
+                      fontWeight: 600,
+                      color: "#10B981",
+                    }}
+                  >
+                    ₱{Number(court.price ?? 0).toFixed(2)} / hour
+                  </p>
                   <p
                     style={{
                       margin: 0,
@@ -969,10 +986,10 @@ export default function BookingExperience() {
                       borderRadius: "var(--border-radius-md)",
                       border: "none",
                       cursor: takenCount === totalSlots ? "not-allowed" : "pointer",
-                      background: takenCount === totalSlots ? "var(--color-background-tertiary)" : "#1D9E75",
+                      background: takenCount === totalSlots ? "var(--color-background-tertiary)" : "linear-gradient(135deg, #10B981, #059669)",
                       color: takenCount === totalSlots ? "var(--color-text-secondary)" : "#ffffff",
                       opacity: takenCount === totalSlots ? 0.6 : 1,
-                      boxShadow: takenCount === totalSlots ? "none" : "0 2px 10px rgba(29,158,117,0.3)",
+                      boxShadow: takenCount === totalSlots ? "none" : "0 2px 12px rgba(16,185,129,0.35)",
                     }}
                   >
                     {takenCount === totalSlots ? "Fully booked" : "Reserve this court"}
@@ -987,8 +1004,8 @@ export default function BookingExperience() {
       {/* ── FOOTER ── */}
       <footer
         style={{
-          borderTop: "1px solid #17876a",
-          background: "#1D9E75",
+          borderTop: "1px solid rgba(255,255,255,0.06)",
+          background: "#060B14",
         }}
       >
         <div
@@ -1052,9 +1069,9 @@ export default function BookingExperience() {
             zIndex: 50,
             background: "rgba(0,0,0,0.4)",
             display: "flex",
-            alignItems: "center",
+            alignItems: "flex-start",
             justifyContent: "center",
-            padding: 16,
+            padding: "10px 12px",
             overflowY: "auto",
           }}
         >
@@ -1062,15 +1079,15 @@ export default function BookingExperience() {
             onClick={(e) => e.stopPropagation()}
             style={{
               width: "100%",
-              maxWidth: 560,
-              maxHeight: "90dvh",
+              maxWidth: 600,
+              maxHeight: "calc(100dvh - 20px)",
               overflowY: "auto",
               background: "var(--color-background-primary)",
               border: "1px solid var(--color-border-tertiary)",
               borderRadius: "var(--border-radius-lg)",
-              padding: 28,
+              padding: 16,
               boxSizing: "border-box",
-              boxShadow: "0 24px 64px rgba(13,100,68,0.16), 0 4px 16px rgba(13,100,68,0.08)",
+              boxShadow: "0 24px 64px rgba(0,0,0,0.5), 0 4px 16px rgba(0,0,0,0.3)",
             }}
           >
             {/* Modal header */}
@@ -1079,11 +1096,11 @@ export default function BookingExperience() {
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "space-between",
-                marginBottom: 16,
+                marginBottom: 12,
               }}
             >
               <div>
-                <p style={{ margin: "0 0 2px", fontSize: 11, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.08em", color: "#0F6E56" }}>
+                <p style={{ margin: "0 0 2px", fontSize: 11, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.08em", color: "#6EE7B7" }}>
                   Reservation
                 </p>
                 <h3 style={{ margin: 0, fontSize: 17, fontWeight: 500 }}>
@@ -1111,11 +1128,11 @@ export default function BookingExperience() {
             {form.startTime && (
               <div
                 style={{
-                  background: "#E1F5EE",
-                  border: "0.5px solid #9FE1CB",
+                  background: "rgba(16,185,129,0.10)",
+                  border: "0.5px solid rgba(16,185,129,0.25)",
                   borderRadius: "var(--border-radius-md)",
-                  padding: "10px 14px",
-                  marginBottom: 16,
+                  padding: "8px 12px",
+                  marginBottom: 10,
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "space-between",
@@ -1123,10 +1140,10 @@ export default function BookingExperience() {
                 }}
               >
                 <div>
-                  <p style={{ margin: "0 0 2px", fontSize: 13, fontWeight: 500, color: "#04342C" }}>
+                  <p style={{ margin: "0 0 2px", fontSize: 13, fontWeight: 500, color: "#E2E8F0" }}>
                     {selectedCourt?.name} · {form.bookingDate}
                   </p>
-                  <p style={{ margin: 0, fontSize: 12, color: "#085041" }}>
+                  <p style={{ margin: 0, fontSize: 12, color: "#94A3B8" }}>
                     {formatHour(form.startTime)} – {form.endTime ? formatHour(form.endTime) : "…"}
                   </p>
                 </div>
@@ -1136,8 +1153,8 @@ export default function BookingExperience() {
                     fontWeight: 500,
                     padding: "3px 8px",
                     borderRadius: "var(--border-radius-md)",
-                    background: "#1D9E75",
-                    color: "#04342C",
+                    background: "rgba(16,185,129,0.20)",
+                    color: "#A7F3D0",
                     whiteSpace: "nowrap",
                   }}
                 >
@@ -1146,83 +1163,423 @@ export default function BookingExperience() {
               </div>
             )}
 
-            {/* Date picker */}
-            <div style={{ marginBottom: 16 }}>
-              <p style={{ margin: "0 0 10px", fontSize: 13, fontWeight: 500, color: "var(--color-text-primary)" }}>
-                Select a date
-              </p>
-              <CalendarPicker
-                selected={form.bookingDate}
-                minDate={todayISODate()}
-                onSelect={(date) =>
-                  setForm((prev) => ({ ...prev, bookingDate: date, startTime: "", endTime: "" }))
-                }
-              />
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                gap: 6,
+                marginBottom: 10,
+              }}
+            >
+              {[1, 2].map((step) => {
+                const isActive = reservationStep === step;
+                const isDone = reservationStep > step;
+
+                return (
+                  <div
+                    key={step}
+                    style={{
+                      borderRadius: "var(--border-radius-md)",
+                      border: isActive ? "1px solid rgba(16,185,129,0.45)" : "1px solid var(--color-border-tertiary)",
+                      background: isActive ? "rgba(16,185,129,0.08)" : "var(--color-background-secondary)",
+                      padding: "8px 10px",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                    }}
+                  >
+                    <span
+                      style={{
+                        width: 22,
+                        height: 22,
+                        borderRadius: "50%",
+                        display: "grid",
+                        placeItems: "center",
+                        fontSize: 11,
+                        fontWeight: 700,
+                        background: isActive || isDone ? "#10B981" : "rgba(255,255,255,0.08)",
+                        color: isActive || isDone ? "#fff" : "var(--color-text-secondary)",
+                        flexShrink: 0,
+                      }}
+                    >
+                      {isDone ? "✓" : step}
+                    </span>
+                    <div style={{ display: "grid", gap: 1 }}>
+                      <span style={{ fontSize: 11, fontWeight: 600, color: "var(--color-text-primary)" }}>
+                        {step === 1 ? "Schedule" : "Details & payment"}
+                      </span>
+                      <span style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>
+                        {step === 1 ? "Pick date and time" : "Contact info and payment method"}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
 
-            {/* Timeline picker */}
-            <div style={{ marginBottom: 20 }}>
-              <p style={{ margin: "0 0 10px", fontSize: 13, fontWeight: 500, color: "var(--color-text-primary)" }}>
-                Select time
-                <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 400, color: "var(--color-text-secondary)" }}>
-                  — 8 AM – 10 PM
-                </span>
-              </p>
-              <TimelinePicker
-                startTime={form.startTime}
-                endTime={form.endTime}
-                activeBookings={activeBookingsForCourt}
-                blockedRanges={courtBlockedSlots}
-                onChange={(start, end) => setForm((p) => ({ ...p, startTime: start, endTime: end }))}
-              />
-              {form.startTime && form.endTime && hasConflict(form.startTime, form.endTime) && (
-                <p style={{ margin: "8px 0 0", fontSize: 12, color: "#dc2626" }}>
-                  This time range conflicts with an existing booking or blocked slot.
-                </p>
-              )}
-            </div>
-
-            <hr style={{ border: "none", borderTop: "0.5px solid var(--color-border-tertiary)", margin: "0 0 20px" }} />
-
-            {/* Booking form */}
-            <form onSubmit={onSubmit} style={{ display: "grid", gap: 14 }}>
-              <label style={labelStyle}>
-                Full name
-                <input
-                  style={inputStyle}
-                  required
-                  minLength={2}
-                  placeholder="Alex Gonzalez"
-                  value={form.name}
-                  onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
-                />
-              </label>
-
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                <label style={labelStyle}>
-                  Contact number
-                  <input
-                    style={inputStyle}
-                    required
-                    minLength={7}
-                    placeholder="0917 123 4567"
-                    value={form.contactNumber}
-                    onChange={(e) => setForm((p) => ({ ...p, contactNumber: e.target.value }))}
+            {reservationStep === 1 && (
+              <div style={{ marginBottom: 10 }}>
+                <div style={{ marginBottom: 10 }}>
+                  <p style={{ margin: "0 0 10px", fontSize: 13, fontWeight: 500, color: "var(--color-text-primary)" }}>
+                    Select a date
+                  </p>
+                  <CalendarPicker
+                    selected={form.bookingDate}
+                    minDate={todayISODate()}
+                    onSelect={(date) =>
+                      setForm((prev) => ({ ...prev, bookingDate: date, startTime: "", endTime: "" }))
+                    }
                   />
-                </label>
-                <label style={labelStyle}>
-                  Gmail address
-                  <input
-                    style={inputStyle}
-                    required
-                    type="email"
-                    placeholder="you@gmail.com"
-                    value={form.email}
-                    onChange={(e) => setForm((p) => ({ ...p, email: e.target.value }))}
-                  />
-                </label>
+                </div>
+
+                <div>
+                  <p style={{ margin: "0 0 10px", fontSize: 13, fontWeight: 500, color: "var(--color-text-primary)" }}>
+                    Select time
+                  </p>
+                  <div style={{ display: "flex", gap: 8, marginTop: 6, alignItems: "stretch", flexWrap: "wrap" }}>
+                    <div style={{ flex: "1 1 230px", display: "grid", gap: 6 }}>
+                      <label style={labelStyle}>
+                        Time in
+                        <input
+                          type="time"
+                          step={60}
+                          min={
+                            form.bookingDate === todayISODate()
+                              ? (currentTimeHHMM() < `${String(SLOT_START_HOUR).padStart(2, "0")}:00`
+                                  ? `${String(SLOT_START_HOUR).padStart(2, "0")}:00`
+                                  : currentTimeHHMM())
+                              : `${String(SLOT_START_HOUR).padStart(2, "0")}:00`
+                          }
+                          max={`${String(SLOT_END_HOUR - 1).padStart(2, "0")}:59`}
+                          value={form.startTime}
+                          onChange={(e) => setForm((prev) => ({ ...prev, startTime: e.target.value }))}
+                          style={inputStyle}
+                        />
+                      </label>
+                      <label style={labelStyle}>
+                        Time out
+                        <input
+                          type="time"
+                          step={60}
+                          min={
+                            form.startTime
+                              ? addMinutes(form.startTime, 1)
+                              : form.bookingDate === todayISODate()
+                              ? (currentTimeHHMM() < `${String(SLOT_START_HOUR).padStart(2, "0")}:00`
+                                  ? `${String(SLOT_START_HOUR).padStart(2, "0")}:00`
+                                  : currentTimeHHMM())
+                              : `${String(SLOT_START_HOUR).padStart(2, "0")}:00`
+                          }
+                          max={`${String(SLOT_END_HOUR).padStart(2, "0")}:00`}
+                          value={form.endTime}
+                          onChange={(e) => setForm((prev) => ({ ...prev, endTime: e.target.value }))}
+                          style={inputStyle}
+                        />
+                      </label>
+                    </div>
+
+                    {(() => {
+                      const preview = form.startTime || currentTimeHHMM();
+                      const [h, m] = preview.split(":").map(Number);
+                      const hourDeg = (isNaN(h) ? 0 : ((h % 12) + (isNaN(m) ? 0 : m / 60)) * 30);
+                      const minuteDeg = (isNaN(m) ? 0 : m * 6);
+                      const durationMinutes = form.startTime && form.endTime ? Math.max(0, toMinutes(form.endTime) - toMinutes(form.startTime)) : 0;
+
+                      return (
+                        <div
+                          style={{
+                            flex: "0 0 138px",
+                            border: "1px solid var(--color-border-secondary)",
+                            borderRadius: "var(--border-radius-md)",
+                            padding: 8,
+                            background: "var(--color-background-secondary)",
+                            display: "grid",
+                            gap: 6,
+                            alignContent: "start",
+                          }}
+                        >
+                          <p style={{ margin: 0, fontSize: 11, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--color-text-secondary)" }}>
+                            Clock preview
+                          </p>
+                          <div
+                            style={{
+                              width: 70,
+                              height: 70,
+                              margin: "0 auto",
+                              borderRadius: "50%",
+                              border: "2px solid rgba(16,185,129,0.45)",
+                              background: "radial-gradient(circle at 30% 30%, rgba(16,185,129,0.22), rgba(11,15,26,0.9) 70%)",
+                              position: "relative",
+                            }}
+                          >
+                            <span style={{ position: "absolute", top: 4, left: "50%", transform: "translateX(-50%)", fontSize: 9, color: "#6EE7B7" }}>12</span>
+                            <span style={{ position: "absolute", bottom: 4, left: "50%", transform: "translateX(-50%)", fontSize: 9, color: "#6EE7B7" }}>6</span>
+                            <span style={{ position: "absolute", left: 6, top: "50%", transform: "translateY(-50%)", fontSize: 9, color: "#6EE7B7" }}>9</span>
+                            <span style={{ position: "absolute", right: 6, top: "50%", transform: "translateY(-50%)", fontSize: 9, color: "#6EE7B7" }}>3</span>
+
+                            <span
+                              style={{
+                                position: "absolute",
+                                left: "50%",
+                                top: "50%",
+                                width: 2,
+                                height: 18,
+                                background: "#A7F3D0",
+                                transformOrigin: "bottom center",
+                                transform: `translate(-50%, -100%) rotate(${hourDeg}deg)`,
+                                borderRadius: 999,
+                              }}
+                            />
+                            <span
+                              style={{
+                                position: "absolute",
+                                left: "50%",
+                                top: "50%",
+                                width: 1.5,
+                                height: 24,
+                                background: "#10B981",
+                                transformOrigin: "bottom center",
+                                transform: `translate(-50%, -100%) rotate(${minuteDeg}deg)`,
+                                borderRadius: 999,
+                              }}
+                            />
+                            <span
+                              style={{
+                                position: "absolute",
+                                left: "50%",
+                                top: "50%",
+                                width: 7,
+                                height: 7,
+                                borderRadius: "50%",
+                                background: "#10B981",
+                                transform: "translate(-50%, -50%)",
+                              }}
+                            />
+                          </div>
+
+                          <div style={{ fontSize: 11, color: "var(--color-text-secondary)", display: "grid", gap: 2 }}>
+                            <span>In: {form.startTime ? formatHour(form.startTime) : "--:--"}</span>
+                            <span>Out: {form.endTime ? formatHour(form.endTime) : "--:--"}</span>
+                            <span>Duration: {durationMinutes > 0 ? `${Math.floor(durationMinutes / 60)}h ${durationMinutes % 60}m` : "--"}</span>
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </div>
               </div>
+            )}
 
+            {reservationStep === 2 && (() => {
+              const pricePerHour = selectedCourt?.price ?? 0;
+              const durationMinutes = form.startTime && form.endTime
+                ? Math.max(0, toMinutes(form.endTime) - toMinutes(form.startTime))
+                : 0;
+              const hours = durationMinutes / 60;
+              const total = pricePerHour * hours;
+              const hasSelection = durationMinutes > 0;
+              return (
+                <div style={{ marginBottom: 10 }}>
+                  <div style={{ marginBottom: 10, display: "grid", gap: 8 }}>
+                    <label style={labelStyle}>
+                      Full name
+                      <input
+                        style={inputStyle}
+                        required
+                        minLength={2}
+                        placeholder="Alex Gonzalez"
+                        value={form.name}
+                        onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
+                      />
+                    </label>
+
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                      <label style={labelStyle}>
+                        Contact number
+                        <input
+                          style={inputStyle}
+                          required
+                          minLength={7}
+                          placeholder="0917 123 4567"
+                          value={form.contactNumber}
+                          onChange={(e) => setForm((p) => ({ ...p, contactNumber: e.target.value }))}
+                        />
+                      </label>
+                      <label style={labelStyle}>
+                        Gmail address
+                        <input
+                          style={inputStyle}
+                          required
+                          type="email"
+                          placeholder="you@gmail.com"
+                          value={form.email}
+                          onChange={(e) => setForm((p) => ({ ...p, email: e.target.value }))}
+                        />
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Method toggle */}
+                  <p style={{ margin: "0 0 8px", fontSize: 13, fontWeight: 500, color: "var(--color-text-primary)" }}>
+                    Payment method
+                  </p>
+                  <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                    {(["cash", "online"] as const).map((method) => (
+                      <button
+                        key={method}
+                        type="button"
+                        onClick={() => setForm((p) => ({ ...p, paymentMethod: method, paymentProofImage: "" }))}
+                        style={{
+                          flex: 1,
+                          padding: "7px",
+                          fontSize: 13,
+                          fontWeight: 600,
+                          borderRadius: "var(--border-radius-md)",
+                          border: form.paymentMethod === method ? "1.5px solid #10B981" : "1px solid var(--color-border-secondary)",
+                          background: form.paymentMethod === method ? "rgba(16,185,129,0.12)" : "var(--color-background-secondary)",
+                          color: form.paymentMethod === method ? "#10B981" : "var(--color-text-secondary)",
+                          cursor: "pointer",
+                          transition: "all 0.15s",
+                          textTransform: "capitalize",
+                        }}
+                      >
+                        {method === "cash" ? "💵 Cash" : "📱 Online"}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Cash: price breakdown */}
+                  {form.paymentMethod === "cash" && (
+                    <div
+                      style={{
+                        borderRadius: "var(--border-radius-md)",
+                        border: hasSelection ? "1px solid rgba(16,185,129,0.35)" : "1px solid var(--color-border-tertiary)",
+                        background: hasSelection ? "rgba(16,185,129,0.07)" : "var(--color-background-secondary)",
+                        padding: "8px 10px",
+                        opacity: hasSelection ? 1 : 0.55,
+                        transition: "all 0.2s",
+                      }}
+                    >
+                      <p style={{ margin: "0 0 8px", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: hasSelection ? "#6EE7B7" : "var(--color-text-secondary)" }}>
+                        Payment summary
+                      </p>
+                      {!hasSelection ? (
+                        <p style={{ margin: 0, fontSize: 12, color: "var(--color-text-secondary)" }}>
+                          Select a time range to see the total amount.
+                        </p>
+                      ) : (
+                        <>
+                          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--color-text-secondary)", marginBottom: 4 }}>
+                            <span>Rate</span>
+                            <span>₱{pricePerHour.toFixed(2)} / hr</span>
+                          </div>
+                          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--color-text-secondary)", marginBottom: 8 }}>
+                            <span>Duration</span>
+                            <span>{Math.floor(durationMinutes / 60)}h {durationMinutes % 60}m</span>
+                          </div>
+                          <div style={{ borderTop: "1px solid rgba(16,185,129,0.2)", paddingTop: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                            <span style={{ fontSize: 13, fontWeight: 600, color: "var(--color-text-primary)" }}>Total</span>
+                            <span style={{ fontSize: 18, fontWeight: 700, color: "#10B981" }}>₱{total.toFixed(2)}</span>
+                          </div>
+                          <p style={{ margin: "6px 0 0", fontSize: 11, color: "var(--color-text-secondary)" }}>
+                            Payment is collected at the venue upon arrival.
+                          </p>
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Online: proof upload */}
+                  {form.paymentMethod === "online" && (
+                    <div
+                      style={{
+                        borderRadius: "var(--border-radius-md)",
+                        border: form.paymentProofImage ? "1px solid rgba(16,185,129,0.35)" : "1px solid var(--color-border-tertiary)",
+                        background: "var(--color-background-secondary)",
+                        padding: "8px 10px",
+                      }}
+                    >
+                      <p style={{ margin: "0 0 4px", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: "#6EE7B7" }}>
+                        Payment proof
+                      </p>
+                      <p style={{ margin: "0 0 10px", fontSize: 12, color: "var(--color-text-secondary)" }}>
+                        Transfer payment to our GCash/online account, then upload a screenshot below. Staff will verify and record the amount.
+                      </p>
+                      <label
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          gap: 8,
+                          padding: "7px",
+                          borderRadius: "var(--border-radius-md)",
+                          border: "1.5px dashed rgba(16,185,129,0.4)",
+                          cursor: "pointer",
+                          fontSize: 13,
+                          color: "#6EE7B7",
+                          background: "rgba(16,185,129,0.05)",
+                        }}
+                      >
+                        📎 {form.paymentProofImage ? "Change screenshot" : "Upload payment screenshot"}
+                        <input
+                          type="file"
+                          accept="image/*"
+                          style={{ display: "none" }}
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (!file) return;
+                            if (file.size > 3 * 1024 * 1024) {
+                              setSubmissionErrorMessage("Image must be under 3 MB.");
+                              return;
+                            }
+                            const reader = new FileReader();
+                            reader.onload = () => {
+                              setForm((p) => ({ ...p, paymentProofImage: reader.result as string }));
+                              setSubmissionErrorMessage("");
+                            };
+                            reader.readAsDataURL(file);
+                          }}
+                        />
+                      </label>
+                      {form.paymentProofImage && (
+                        <div style={{ marginTop: 8, position: "relative" }}>
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={form.paymentProofImage}
+                            alt="Payment proof"
+                            style={{ width: "100%", maxHeight: 112, objectFit: "contain", borderRadius: "var(--border-radius-md)", border: "1px solid rgba(16,185,129,0.25)" }}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setForm((p) => ({ ...p, paymentProofImage: "" }))}
+                            style={{
+                              position: "absolute",
+                              top: 6,
+                              right: 6,
+                              background: "rgba(0,0,0,0.6)",
+                              border: "none",
+                              borderRadius: "50%",
+                              width: 24,
+                              height: 24,
+                              fontSize: 12,
+                              color: "#fff",
+                              cursor: "pointer",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                            }}
+                          >✕</button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            <hr style={{ border: "none", borderTop: "0.5px solid var(--color-border-tertiary)", margin: "0 0 10px" }} />
+
+            <form onSubmit={onSubmit} style={{ display: "grid", gap: 8 }}>
               {errorMessage && (
                 <p
                   style={{
@@ -1238,32 +1595,81 @@ export default function BookingExperience() {
                 </p>
               )}
 
-              <button
-                type="submit"
-                disabled={isSubmitting || !form.startTime || !form.endTime}
-                style={{
-                  width: "100%",
-                  padding: "13px",
-                  fontSize: 14,
-                  fontWeight: 600,
-                  borderRadius: "var(--border-radius-md)",
-                  border: "none",
-                  cursor: isSubmitting || !form.startTime || !form.endTime ? "not-allowed" : "pointer",
-                  background: !form.startTime || !form.endTime ? "var(--color-background-tertiary)" : "#1D9E75",
-                  color: !form.startTime || !form.endTime ? "var(--color-text-secondary)" : "#ffffff",
-                  opacity: isSubmitting ? 0.6 : 1,
-                  transition: "background 0.15s, box-shadow 0.15s",
-                  boxShadow: !form.startTime || !form.endTime ? "none" : "0 3px 14px rgba(29,158,117,0.35)",
-                }}
-              >
-                {isSubmitting ? "Submitting…" : !form.startTime || !form.endTime ? "Select a time range first" : "Submit reservation request"}
-              </button>
+              <div style={{ display: "flex", gap: 8 }}>
+                {reservationStep === 2 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSubmissionErrorMessage("");
+                      setReservationStep(1);
+                    }}
+                    style={{
+                      flex: 1,
+                      padding: "11px",
+                      fontSize: 14,
+                      fontWeight: 600,
+                      borderRadius: "var(--border-radius-md)",
+                      border: "1px solid var(--color-border-secondary)",
+                      cursor: "pointer",
+                      background: "var(--color-background-secondary)",
+                      color: "var(--color-text-primary)",
+                    }}
+                  >
+                    Back
+                  </button>
+                )}
+
+                {reservationStep === 1 ? (
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.preventDefault();
+                      goToPaymentStep();
+                    }}
+                    style={{
+                      flex: 1,
+                      padding: "11px",
+                      fontSize: 14,
+                      fontWeight: 600,
+                      borderRadius: "var(--border-radius-md)",
+                      border: "none",
+                      cursor: "pointer",
+                      background: "linear-gradient(135deg, #10B981, #059669)",
+                      color: "#ffffff",
+                      boxShadow: "0 3px 16px rgba(16,185,129,0.4)",
+                    }}
+                  >
+                    Continue to payment
+                  </button>
+                ) : (
+                  <button
+                    type="submit"
+                    disabled={isSubmitting || !form.startTime || !form.endTime}
+                    style={{
+                      flex: 1,
+                      padding: "11px",
+                      fontSize: 14,
+                      fontWeight: 600,
+                      borderRadius: "var(--border-radius-md)",
+                      border: "none",
+                      cursor: isSubmitting || !form.startTime || !form.endTime ? "not-allowed" : "pointer",
+                      background: !form.startTime || !form.endTime ? "var(--color-background-tertiary)" : "linear-gradient(135deg, #10B981, #059669)",
+                      color: !form.startTime || !form.endTime ? "var(--color-text-secondary)" : "#ffffff",
+                      opacity: isSubmitting ? 0.6 : 1,
+                      transition: "background 0.15s, box-shadow 0.15s",
+                      boxShadow: !form.startTime || !form.endTime ? "none" : "0 3px 16px rgba(16,185,129,0.4)",
+                    }}
+                  >
+                    {isSubmitting ? "Submitting…" : "Submit reservation request"}
+                  </button>
+                )}
+              </div>
 
               <p
                 style={{
                   margin: 0,
                   textAlign: "center",
-                  fontSize: 12,
+                  fontSize: 11,
                   color: "var(--color-text-secondary)",
                 }}
               >

@@ -21,6 +21,7 @@ type Court = {
   name: string;
   surfaceType: "wooden" | "rubber";
   status: "active" | "inactive" | "maintenance";
+  price: number;
 };
 
 type Booking = {
@@ -33,6 +34,7 @@ type Booking = {
   status: string;
   paymentReference?: string | null;
   denialReason?: string | null;
+  expiresAt?: string | null;
 };
 
 type StaffUser = {
@@ -50,6 +52,7 @@ type AbuseLog = {
   abuseType: string;
   message: string;
   createdAt: string;
+  metadata?: Record<string, unknown> | null;
 };
 
 type EditModalState =
@@ -70,6 +73,11 @@ type EditModalState =
         paymentReference: string;
         denialReason: string;
         confirmDenied: string;
+        courtId: string;
+        bookingDate: string;
+        startTime: string;
+        endTime: string;
+        expiresAt: string;
       };
     }
   | {
@@ -89,11 +97,12 @@ type EditModalState =
         name: string;
         surfaceType: "wooden" | "rubber";
         status: "active" | "inactive" | "maintenance";
+        price: number;
       };
     };
 
 type DeleteModalState = {
-  entity: "customer" | "booking" | "user" | "court";
+  entity: "customer" | "booking" | "user" | "court" | "abuse-log";
   id: string;
   endpoint: string;
   errorMessage: string;
@@ -102,19 +111,19 @@ type DeleteModalState = {
 const styles = {
   // Layout
   shell:
-    "grid min-h-screen grid-cols-1 bg-[#f2f6f4] text-[#0d2418] lg:grid-cols-[260px_1fr]",
+    "grid min-h-screen grid-cols-1 bg-[#0B0F1A] text-gray-100 lg:grid-cols-[260px_1fr]",
 
-  // Sidebar — deep forest green
+  // Sidebar — dark navy
   sidebar:
-    "flex flex-row flex-wrap items-center gap-1 border-b border-white/10 bg-[#0d2418] p-3 lg:flex-col lg:items-stretch lg:gap-0.5 lg:border-b-0 lg:border-r lg:border-white/10 lg:p-4",
+    "flex flex-row flex-wrap items-center gap-1 border-b border-white/10 bg-[#060B14] p-3 lg:flex-col lg:items-stretch lg:gap-0.5 lg:border-b-0 lg:border-r lg:border-white/10 lg:p-4",
   brand:
     "flex w-full items-center gap-2 rounded-xl px-3 py-3 text-[16px] font-bold text-white",
   userMeta:
-    "mb-2 rounded-lg border border-[#1D9E75]/25 bg-[#1D9E75]/10 px-3 py-2 text-xs text-[#5aad8c]",
+    "mb-2 rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-400",
   navButton:
-    "flex w-full items-center gap-2.5 rounded-lg border border-transparent bg-transparent px-3 py-2.5 text-left text-[13px] font-medium text-[#7ab89a] transition-all hover:bg-white/[0.08] hover:text-white",
+    "flex w-full items-center gap-2.5 rounded-lg border border-transparent bg-transparent px-3 py-2.5 text-left text-[13px] font-medium text-gray-400 transition-all hover:bg-white/[0.06] hover:text-white",
   navButtonActive:
-    "border-[#17876a] bg-[#1D9E75] text-white hover:bg-[#17876a] hover:text-white",
+    "border-emerald-700 bg-emerald-600 text-white hover:bg-emerald-700 hover:text-white",
   navBadge:
     "ml-auto min-w-[20px] rounded-full bg-white/15 px-1.5 py-0.5 text-center text-[10px] font-bold tabular-nums",
   navDivider: "my-2 border-t border-white/10",
@@ -122,69 +131,69 @@ const styles = {
   // Main content
   main: "min-w-0",
   header:
-    "flex h-16 items-center justify-between border-b border-[#e2ede8] bg-white px-6 shadow-sm",
+    "flex h-16 items-center justify-between border-b border-gray-800 bg-[#111827] px-6 shadow-sm",
   headerLeft: "flex flex-col gap-0.5",
-  headerTitle: "text-[15px] font-bold text-[#0d2418]",
-  headerSub: "text-[11px] text-[#7aab93] capitalize",
+  headerTitle: "text-[15px] font-bold text-white",
+  headerSub: "text-[11px] text-gray-500 capitalize",
   headerActions: "flex flex-wrap gap-2",
   content: "p-6",
 
   // Panel / Card
-  panel: "mb-5 overflow-hidden rounded-2xl border border-[#e2ede8] bg-white shadow-sm",
+  panel: "mb-5 overflow-hidden rounded-2xl border border-gray-800 bg-[#111827] shadow-lg shadow-black/20",
   panelHeader:
-    "flex items-center justify-between border-b border-[#edf7f2] bg-gradient-to-r from-[#f9fbfa] to-[#f4f9f7] px-5 py-4",
+    "flex items-center justify-between border-b border-gray-800 bg-gradient-to-r from-[#111827] to-[#0B0F1A] px-5 py-4",
   panelBody: "p-5",
-  sectionTitle: "text-[15px] font-bold text-[#0d2418]",
+  sectionTitle: "text-[15px] font-bold text-white",
   sectionCount:
-    "ml-2 inline-flex items-center rounded-full bg-[#1D9E75]/[0.12] px-2 py-0.5 text-[11px] font-semibold text-[#1D9E75]",
+    "ml-2 inline-flex items-center rounded-full bg-emerald-500/[0.15] px-2 py-0.5 text-[11px] font-semibold text-emerald-400",
 
   // Add-new form section inside panel
-  addFormSection: "mb-5 rounded-xl border border-[#e2ede8] bg-[#f9fbfa] p-4",
+  addFormSection: "mb-5 rounded-xl border border-gray-800 bg-[#0B0F1A] p-4",
   addFormTitle:
-    "mb-3 text-[11px] font-bold uppercase tracking-widest text-[#6b9e84]",
+    "mb-3 text-[11px] font-bold uppercase tracking-widest text-emerald-400",
   gridForm: "grid gap-2",
 
   // Inputs
   input:
-    "w-full rounded-lg border border-[#d1e0d8] bg-white px-3 py-2.5 text-[13px] text-[#0d2418] outline-none transition placeholder:text-[#9ab5a8] focus:border-[#1D9E75] focus:ring-2 focus:ring-[#1D9E75]/20",
+    "w-full rounded-lg border border-gray-700 bg-[#1F2937] px-3 py-2.5 text-[13px] text-gray-100 outline-none transition placeholder:text-gray-600 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20",
   select:
-    "w-full rounded-lg border border-[#d1e0d8] bg-white px-3 py-2.5 text-[13px] text-[#0d2418] outline-none transition focus:border-[#1D9E75] focus:ring-2 focus:ring-[#1D9E75]/20",
+    "w-full rounded-lg border border-gray-700 bg-[#1F2937] px-3 py-2.5 text-[13px] text-gray-100 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20",
 
   // Buttons
   btn:
-    "inline-flex items-center justify-center rounded-lg border px-3.5 py-2 text-xs font-semibold transition-all disabled:cursor-not-allowed disabled:opacity-50",
-  btnPrimary: "border-[#1D9E75] bg-[#1D9E75] text-white hover:bg-[#17876a]",
+    "inline-flex items-center justify-center rounded-lg border px-3.5 py-2 text-xs font-semibold transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-50",
+  btnPrimary: "border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-700 hover:shadow-lg hover:shadow-emerald-500/20",
   btnDark:
-    "border-[#d1e0d8] bg-white text-[#3b6b53] hover:bg-[#f4f7f6] hover:border-[#afd1c2]",
+    "border-gray-700 bg-[#1F2937] text-gray-300 hover:bg-gray-700 hover:border-gray-600",
   btnInfo:
-    "border-[#c8e2d6] bg-[#edf7f2] text-[#1D9E75] hover:bg-[#ddf0e8]",
+    "border-emerald-800 bg-emerald-900/30 text-emerald-400 hover:bg-emerald-900/50",
   btnDanger:
-    "border-[#fecaca] bg-[#fef2f2] text-[#dc2626] hover:bg-[#fee2e2]",
+    "border-red-900/60 bg-red-900/20 text-red-400 hover:bg-red-900/40",
 
   // Table — uses Tailwind arbitrary child selectors for th/td
   tableWrap: "overflow-x-auto",
   table:
-    "w-full min-w-[700px] border-collapse text-[13px] [&_thead]:bg-[#f4f7f6] [&_th]:border-b [&_th]:border-[#e2ede8] [&_th]:px-4 [&_th]:py-3 [&_th]:text-left [&_th]:text-[11px] [&_th]:font-semibold [&_th]:uppercase [&_th]:tracking-wide [&_th]:text-[#6b9e84] [&_td]:border-b [&_td]:border-[#f0f5f2] [&_td]:px-4 [&_td]:py-3.5 [&_td]:whitespace-nowrap [&_tbody_tr:last-child_td]:border-b-0 [&_tbody_tr]:transition-colors [&_tbody_tr:hover]:bg-[#f9fbfa]",
+    "w-full min-w-[700px] border-collapse text-[13px] [&_thead]:bg-[#0B0F1A] [&_th]:border-b [&_th]:border-gray-800 [&_th]:px-4 [&_th]:py-3 [&_th]:text-left [&_th]:text-[11px] [&_th]:font-semibold [&_th]:uppercase [&_th]:tracking-wide [&_th]:text-gray-500 [&_td]:border-b [&_td]:border-gray-800/50 [&_td]:px-4 [&_td]:py-3.5 [&_td]:whitespace-nowrap [&_tbody_tr:last-child_td]:border-b-0 [&_tbody_tr]:transition-colors [&_tbody_tr:hover]:bg-white/[0.03]",
   rowActions: "flex gap-1.5",
 
   // Status badges
   status:
     "inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold",
-  statusPending: "bg-amber-50 text-amber-700 ring-1 ring-amber-200/80",
-  statusApproved: "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200/80",
-  statusCancelled: "bg-red-50 text-red-600 ring-1 ring-red-200/80",
-  statusInfo: "bg-[#edf7f2] text-[#3b6b53] ring-1 ring-[#c8e2d6]",
+  statusPending: "bg-amber-900/30 text-amber-400 ring-1 ring-amber-500/30",
+  statusApproved: "bg-emerald-900/30 text-emerald-400 ring-1 ring-emerald-500/30",
+  statusCancelled: "bg-red-900/30 text-red-400 ring-1 ring-red-500/30",
+  statusInfo: "bg-emerald-900/30 text-emerald-400 ring-1 ring-emerald-500/30",
 
   // Alert
   alertError:
-    "mb-4 flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-[13px] text-red-700",
+    "mb-4 flex items-center gap-2 rounded-xl border border-red-800 bg-red-900/20 px-4 py-3 text-[13px] text-red-400",
 
   // Login
-  loginShell: "grid min-h-screen place-items-center p-4",
+  loginShell: "grid min-h-screen place-items-center p-4 bg-[#0B0F1A]",
   loginCard:
-    "flex w-full max-w-[400px] flex-col items-center gap-4 rounded-2xl border border-[#e2ede8] bg-white px-8 py-10 shadow-xl",
-  loginTitle: "m-0 text-center text-[22px] font-bold text-[#0d2418]",
-  loginSub: "-mt-2 text-center text-[13px] text-[#7aab93]",
+    "flex w-full max-w-[400px] flex-col items-center gap-4 rounded-2xl border border-gray-800 bg-[#111827] px-8 py-10 shadow-2xl shadow-black/40",
+  loginTitle: "m-0 text-center text-[22px] font-bold text-white",
+  loginSub: "-mt-2 text-center text-[13px] text-gray-400",
   loginInput: "w-full",
   loginSubmit: "mt-1 w-full py-2.5",
   loginBackWrap: "flex w-full justify-center",
@@ -192,14 +201,14 @@ const styles = {
 
   // Modal
   modalOverlay:
-    "fixed inset-0 z-[200] grid place-items-center bg-black/40 p-4 backdrop-blur-sm",
+    "fixed inset-0 z-[200] grid place-items-center bg-black/60 p-4 backdrop-blur-md",
   modalCard:
-    "w-full max-w-[540px] rounded-2xl border border-[#e2ede8] bg-white p-6 shadow-2xl",
-  modalHeader: "mb-4 text-base font-bold capitalize text-[#0d2418]",
+    "w-full max-w-[540px] rounded-2xl border border-gray-800 bg-[#111827] p-6 shadow-2xl shadow-black/50",
+  modalHeader: "mb-4 text-base font-bold capitalize text-white",
   modalActions: "mt-5 flex justify-end gap-2",
   deleteWarningText:
-    "mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-[13px] leading-relaxed text-red-700",
-  fieldErrorText: "-mt-1 mb-1 text-xs text-red-500",
+    "mb-4 rounded-xl border border-red-800 bg-red-900/20 p-4 text-[13px] leading-relaxed text-red-400",
+  fieldErrorText: "-mt-1 mb-1 text-xs text-red-400",
 } as const;
 
 function statusClassName(status: string): string {
@@ -218,6 +227,21 @@ function statusClassName(status: string): string {
   }
 
   return `${styles.status} ${styles.statusInfo}`;
+}
+
+function localISODate(): string {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function currentTimeHHMM(): string {
+  const now = new Date();
+  const hours = String(now.getHours()).padStart(2, "0");
+  const minutes = String(now.getMinutes()).padStart(2, "0");
+  return `${hours}:${minutes}`;
 }
 
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
@@ -262,6 +286,113 @@ function sendLogoutBeacon(): void {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Change-password inline section (used inside the User Details modal)
+// ---------------------------------------------------------------------------
+function ChangePasswordSection({ userId }: { userId: string }) {
+  const [open, setOpen] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
+
+  function reset() {
+    setNewPassword("");
+    setConfirmPassword("");
+    setError(null);
+    setSuccess(false);
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    if (newPassword.length < 3) {
+      setError("Password must be at least 3 characters.");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setError("Passwords do not match.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/admin/users/${userId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: newPassword }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null) as { error?: { message?: string } } | null;
+        throw new Error(body?.error?.message ?? `Request failed (${res.status})`);
+      }
+      setSuccess(true);
+      setNewPassword("");
+      setConfirmPassword("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to change password.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="mt-4 rounded-xl border border-gray-700 bg-[#0B0F1A] p-4">
+      <button
+        type="button"
+        className="flex w-full items-center justify-between text-[13px] font-semibold text-white"
+        onClick={() => { setOpen((o) => !o); reset(); }}
+      >
+        <span>Change Password</span>
+        <span className="text-gray-500 text-xs">{open ? "▲ Hide" : "▼ Show"}</span>
+      </button>
+
+      {open && (
+        <form onSubmit={(e) => void handleSubmit(e)} className="mt-3 flex flex-col gap-2">
+          <input
+            type="password"
+            placeholder="New password"
+            value={newPassword}
+            onChange={(e) => setNewPassword(e.target.value)}
+            autoComplete="new-password"
+            className="w-full rounded-lg border border-gray-700 bg-[#1F2937] px-3 py-2 text-[13px] text-gray-100 outline-none transition placeholder:text-gray-600 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20"
+          />
+          <input
+            type="password"
+            placeholder="Confirm new password"
+            value={confirmPassword}
+            onChange={(e) => setConfirmPassword(e.target.value)}
+            autoComplete="new-password"
+            className="w-full rounded-lg border border-gray-700 bg-[#1F2937] px-3 py-2 text-[13px] text-gray-100 outline-none transition placeholder:text-gray-600 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20"
+          />
+          {error && (
+            <div className="flex items-center justify-between gap-2 rounded-md border border-red-700/40 bg-red-900/20 px-3 py-2">
+              <p className="text-xs text-red-400">{error}</p>
+              <button
+                type="button"
+                onClick={() => setError(null)}
+                className="rounded border border-red-600/60 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-300 hover:bg-red-800/40"
+              >
+                OK
+              </button>
+            </div>
+          )}
+          {success && <p className="text-xs text-emerald-400 font-medium">Password changed successfully.</p>}
+          <div className="flex justify-end">
+            <button
+              type="submit"
+              disabled={saving}
+              className="inline-flex items-center justify-center rounded-lg border border-emerald-600 bg-emerald-600 px-4 py-2 text-xs font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {saving ? "Saving…" : "Update Password"}
+            </button>
+          </div>
+        </form>
+      )}
+    </div>
+  );
+}
+
 export default function AdminPage() {
   const [activeTab, setActiveTab] = useState<
     "bookings" | "customers" | "courts" | "users" | "abuse"
@@ -302,12 +433,18 @@ export default function AdminPage() {
     name: "",
     surfaceType: "rubber",
     status: "active",
+    price: 0,
   });
   const [editModal, setEditModal] = useState<EditModalState | null>(null);
   const [editModalError, setEditModalError] = useState<string | null>(null);
   const [isSavingEdit, setIsSavingEdit] = useState(false);
   const [deleteModal, setDeleteModal] = useState<DeleteModalState | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [selectedBooking, setSelectedBooking] = useState<Booking | null>(null);
+  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+  const [selectedUser, setSelectedUser] = useState<StaffUser | null>(null);
+  const [selectedCourt, setSelectedCourt] = useState<Court | null>(null);
+  const [selectedAbuseLog, setSelectedAbuseLog] = useState<AbuseLog | null>(null);
 
   const customerOptions = useMemo(
     () => customers.map((c) => ({ value: c._id, label: `${c.name} (${c.contactNumber})` })),
@@ -405,11 +542,18 @@ export default function AdminPage() {
     event.preventDefault();
     setError(null);
 
+    const username = loginForm.username.trim();
+    const password = loginForm.password.trim();
+    if (!username || !password) {
+      setError("Please enter both username and password.");
+      return;
+    }
+
     try {
       const response = await fetch("/api/admin/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(loginForm),
+        body: JSON.stringify({ username, password }),
       });
       if (!response.ok) {
         const body = await response.json().catch(() => null);
@@ -466,6 +610,7 @@ export default function AdminPage() {
       role: /role/,
       isActive: /active|inactive/,
       surfaceType: /surface/,
+      price: /price|amount|cost/,
     };
 
     if (field === "_global") {
@@ -521,9 +666,27 @@ export default function AdminPage() {
       }
 
       if (editModal.type === "booking") {
+        const today = localISODate();
+        const nowTime = currentTimeHHMM();
+
+        if (editModal.values.bookingDate === today && editModal.values.startTime < nowTime) {
+          throw new Error("Start time cannot be in the past.");
+        }
+
+        if (editModal.values.startTime >= editModal.values.endTime) {
+          throw new Error("End time must be after start time.");
+        }
+
         const payload: Record<string, unknown> = {
           status: editModal.values.status,
           paymentReference: editModal.values.paymentReference || null,
+          courtId: editModal.values.courtId || undefined,
+          bookingDate: editModal.values.bookingDate || undefined,
+          startTime: editModal.values.startTime || undefined,
+          endTime: editModal.values.endTime || undefined,
+          expiresAt: editModal.values.status === "PENDING" && editModal.values.expiresAt
+            ? new Date(editModal.values.expiresAt).toISOString()
+            : undefined,
         };
 
         if (editModal.values.status === "DENIED") {
@@ -591,11 +754,11 @@ export default function AdminPage() {
       <main
         className={styles.loginShell}
         style={{
-          background: "linear-gradient(135deg, #0d2418 0%, #1a3c2d 50%, #0d2418 100%)",
+          background: "linear-gradient(135deg, #060B14 0%, #0B0F1A 50%, #060B14 100%)",
         }}
       >
         <form onSubmit={handleLogin} className={styles.loginCard} autoComplete="off">
-          <h1 className={styles.loginTitle}>🏸 Admin Dashboard</h1>
+          <h1 className={styles.loginTitle}>🏸 Log in</h1>
           <p className={styles.loginSub}>Sign in to manage your courts</p>
           <input
             type="text"
@@ -650,9 +813,16 @@ export default function AdminPage() {
             </button>
           </div>
           {error && (
-            <p className={`${styles.alertError} ${styles.loginError}`}>
-              {error}
-            </p>
+            <div className={`${styles.alertError} ${styles.loginError} flex items-center justify-between gap-2`}>
+              <span>{error}</span>
+              <button
+                type="button"
+                onClick={() => setError(null)}
+                className="rounded border border-red-600/60 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-300 hover:bg-red-800/30"
+              >
+                OK
+              </button>
+            </div>
           )}
         </form>
       </main>
@@ -734,7 +904,18 @@ export default function AdminPage() {
         </header>
 
         <div className={styles.content}>
-          {error && <p className={styles.alertError}>{error}</p>}
+          {error && (
+            <div className={`${styles.alertError} flex items-center justify-between gap-2`}>
+              <span>{error}</span>
+              <button
+                type="button"
+                onClick={() => setError(null)}
+                className="rounded border border-red-600/60 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-300 hover:bg-red-800/30"
+              >
+                OK
+              </button>
+            </div>
+          )}
 
           {activeTab === "customers" && (
             <section className={styles.panel}>
@@ -801,48 +982,22 @@ export default function AdminPage() {
                       <th>Name</th>
                       <th>Contact</th>
                       <th>Email</th>
-                      <th>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {customers.map((customer) => (
                       <tr key={customer._id}>
-                        <td>{customer.name}</td>
+                        <td>
+                          <button
+                            type="button"
+                            className="text-left font-medium text-emerald-400 hover:underline focus:outline-none"
+                            onClick={() => setSelectedCustomer(customer)}
+                          >
+                            {customer.name}
+                          </button>
+                        </td>
                         <td>{customer.contactNumber}</td>
                         <td>{customer.email}</td>
-                        <td>
-                          <div className={styles.rowActions}>
-                            <button
-                              className={`${styles.btn} ${styles.btnInfo}`}
-                              onClick={() => {
-                                openEditModal({
-                                  type: "customer",
-                                  id: customer._id,
-                                  values: {
-                                    name: customer.name,
-                                    contactNumber: customer.contactNumber,
-                                    email: customer.email,
-                                  },
-                                });
-                              }}
-                            >
-                              Edit
-                            </button>
-                            <button
-                              className={`${styles.btn} ${styles.btnDanger}`}
-                              onClick={() => {
-                                setDeleteModal({
-                                  entity: "customer",
-                                  id: customer._id,
-                                  endpoint: `/api/admin/customers/${customer._id}`,
-                                  errorMessage: "Delete failed",
-                                });
-                              }}
-                            >
-                              Delete
-                            </button>
-                          </div>
-                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -959,53 +1114,27 @@ export default function AdminPage() {
                       <th>Customer</th>
                       <th>Slot</th>
                       <th>Status</th>
-                      <th>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {bookings.map((booking) => (
                       <tr key={booking._id}>
-                        <td>{booking.customer?.name ?? "Unknown"}</td>
+                        <td>
+                          <button
+                            type="button"
+                            className="text-left font-medium text-emerald-400 hover:underline focus:outline-none"
+                            onClick={() => setSelectedBooking(booking)}
+                          >
+                            {booking.customer?.name ?? "Unknown"}
+                          </button>
+                        </td>
                         <td>
                           {booking.courtId} | {booking.bookingDate} {booking.startTime}-{booking.endTime}
                         </td>
                         <td>
                           <span className={statusClassName(booking.status)}>{booking.status}</span>
                         </td>
-                        <td>
-                          <div className={styles.rowActions}>
-                            <button
-                              className={`${styles.btn} ${styles.btnInfo}`}
-                              onClick={() => {
-                                openEditModal({
-                                  type: "booking",
-                                  id: booking._id,
-                                  values: {
-                                    status: booking.status,
-                                    paymentReference: booking.paymentReference ?? "",
-                                    denialReason: booking.denialReason ?? "",
-                                    confirmDenied: booking.status === "DENIED" ? "true" : "false",
-                                  },
-                                });
-                              }}
-                            >
-                              Edit
-                            </button>
-                            <button
-                              className={`${styles.btn} ${styles.btnDanger}`}
-                              onClick={() => {
-                                setDeleteModal({
-                                  entity: "booking",
-                                  id: booking._id,
-                                  endpoint: `/api/admin/bookings/${booking._id}`,
-                                  errorMessage: "Delete booking failed",
-                                });
-                              }}
-                            >
-                              Delete
-                            </button>
-                          </div>
-                        </td>
+
                       </tr>
                     ))}
                   </tbody>
@@ -1095,50 +1224,23 @@ export default function AdminPage() {
                       <th>Name</th>
                       <th>Role</th>
                       <th>Status</th>
-                      <th>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {users.map((user) => (
                       <tr key={user._id}>
-                        <td>{user.username}</td>
+                        <td>
+                          <button
+                            type="button"
+                            className="text-left font-medium text-emerald-400 hover:underline focus:outline-none"
+                            onClick={() => setSelectedUser(user)}
+                          >
+                            {user.username}
+                          </button>
+                        </td>
                         <td>{user.name}</td>
                         <td>{user.role}</td>
                         <td>{user.isActive ? "Active" : "Inactive"}</td>
-                        <td>
-                          <div className={styles.rowActions}>
-                            <button
-                              className={`${styles.btn} ${styles.btnInfo}`}
-                              onClick={() => {
-                                openEditModal({
-                                  type: "user",
-                                  id: user._id,
-                                  values: {
-                                    name: user.name,
-                                    email: user.email,
-                                    role: user.role,
-                                    isActive: user.isActive ? "true" : "false",
-                                  },
-                                });
-                              }}
-                            >
-                              Edit
-                            </button>
-                            <button
-                              className={`${styles.btn} ${styles.btnDanger}`}
-                              onClick={() => {
-                                setDeleteModal({
-                                  entity: "user",
-                                  id: user._id,
-                                  endpoint: `/api/admin/users/${user._id}`,
-                                  errorMessage: "Delete user failed",
-                                });
-                              }}
-                            >
-                              Delete
-                            </button>
-                          </div>
-                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -1169,7 +1271,7 @@ export default function AdminPage() {
                       method: "POST",
                       body: JSON.stringify(newCourt),
                     });
-                    setNewCourt({ name: "", surfaceType: "rubber", status: "active" });
+                    setNewCourt({ name: "", surfaceType: "rubber", status: "active", price: 0 });
                     await loadAll();
                   } catch (err) {
                     setError(err instanceof Error ? err.message : "Create court failed");
@@ -1206,6 +1308,20 @@ export default function AdminPage() {
                   <option value="inactive">inactive</option>
                   <option value="maintenance">maintenance</option>
                 </select>
+                <input
+                  className={styles.input}
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  placeholder="Price"
+                  value={newCourt.price}
+                  onChange={(e) =>
+                    setNewCourt((p) => ({
+                      ...p,
+                      price: e.target.value === "" ? 0 : Number(e.target.value),
+                    }))
+                  }
+                />
                 <button className={`${styles.btn} ${styles.btnPrimary}`} type="submit">
                   Add Court
                 </button>
@@ -1218,52 +1334,28 @@ export default function AdminPage() {
                     <tr>
                       <th>Name</th>
                       <th>Surface Type</th>
+                      <th>Price</th>
                       <th>Status</th>
-                      <th>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {courts.map((court) => (
                       <tr key={court._id}>
-                        <td>{court.name}</td>
+                        <td>
+                          <button
+                            type="button"
+                            className="text-left font-medium text-emerald-400 hover:underline focus:outline-none"
+                            onClick={() => setSelectedCourt(court)}
+                          >
+                            {court.name}
+                          </button>
+                        </td>
                         <td>{court.surfaceType}</td>
+                        <td>{Number(court.price ?? 0).toFixed(2)}</td>
                         <td>
                           <span className={statusClassName(court.status === "active" ? "APPROVED" : "EXPIRED")}>
                             {court.status}
                           </span>
-                        </td>
-                        <td>
-                          <div className={styles.rowActions}>
-                            <button
-                              className={`${styles.btn} ${styles.btnInfo}`}
-                              onClick={() => {
-                                openEditModal({
-                                  type: "court",
-                                  id: court._id,
-                                  values: {
-                                    name: court.name,
-                                    surfaceType: court.surfaceType,
-                                    status: court.status,
-                                  },
-                                });
-                              }}
-                            >
-                              Edit
-                            </button>
-                            <button
-                              className={`${styles.btn} ${styles.btnDanger}`}
-                              onClick={() => {
-                                setDeleteModal({
-                                  entity: "court",
-                                  id: court._id,
-                                  endpoint: `/api/admin/courts/${court._id}`,
-                                  errorMessage: "Delete court failed",
-                                });
-                              }}
-                            >
-                              Delete
-                            </button>
-                          </div>
                         </td>
                       </tr>
                     ))}
@@ -1296,7 +1388,15 @@ export default function AdminPage() {
                   <tbody>
                     {abuseLogs.map((log) => (
                       <tr key={log._id}>
-                        <td>{new Date(log.createdAt).toLocaleString()}</td>
+                        <td>
+                          <button
+                            type="button"
+                            className="text-left font-medium text-emerald-400 hover:underline focus:outline-none whitespace-nowrap"
+                            onClick={() => setSelectedAbuseLog(log)}
+                          >
+                            {new Date(log.createdAt).toLocaleString()}
+                          </button>
+                        </td>
                         <td>{log.ipAddress}</td>
                         <td>
                           <span className={statusClassName(log.abuseType)}>{log.abuseType}</span>
@@ -1371,6 +1471,80 @@ export default function AdminPage() {
 
               {editModal.type === "booking" && (
                 <>
+                  <label className="text-[11px] font-semibold uppercase tracking-widest text-gray-500">Court</label>
+                  <select
+                    className={styles.select}
+                    value={editModal.values.courtId}
+                    onChange={(e) =>
+                      setEditModal((prev) =>
+                        prev && prev.type === "booking"
+                          ? { ...prev, values: { ...prev.values, courtId: e.target.value } }
+                          : prev
+                      )
+                    }
+                  >
+                    <option value="">— Select court —</option>
+                    {courts.map((c) => (
+                      <option key={c._id} value={c._id}>{c.name}</option>
+                    ))}
+                  </select>
+
+                  <label className="text-[11px] font-semibold uppercase tracking-widest text-gray-500">Booking Date</label>
+                  <input
+                    type="date"
+                    className={styles.input}
+                    value={editModal.values.bookingDate}
+                    onChange={(e) =>
+                      setEditModal((prev) =>
+                        prev && prev.type === "booking"
+                          ? { ...prev, values: { ...prev.values, bookingDate: e.target.value } }
+                          : prev
+                      )
+                    }
+                  />
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[11px] font-semibold uppercase tracking-widest text-gray-500">Start Time</label>
+                      <input
+                        type="time"
+                        className={styles.input}
+                        value={editModal.values.startTime}
+                        min={editModal.values.bookingDate === localISODate() ? currentTimeHHMM() : undefined}
+                        onChange={(e) =>
+                          setEditModal((prev) =>
+                            prev && prev.type === "booking"
+                              ? { ...prev, values: { ...prev.values, startTime: e.target.value } }
+                              : prev
+                          )
+                        }
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-semibold uppercase tracking-widest text-gray-500">End Time</label>
+                      <input
+                        type="time"
+                        className={styles.input}
+                        value={editModal.values.endTime}
+                        min={
+                          editModal.values.bookingDate === localISODate()
+                            ? editModal.values.startTime > currentTimeHHMM()
+                              ? editModal.values.startTime
+                              : currentTimeHHMM()
+                            : editModal.values.startTime || undefined
+                        }
+                        onChange={(e) =>
+                          setEditModal((prev) =>
+                            prev && prev.type === "booking"
+                              ? { ...prev, values: { ...prev.values, endTime: e.target.value } }
+                              : prev
+                          )
+                        }
+                      />
+                    </div>
+                  </div>
+
+                  <label className="text-[11px] font-semibold uppercase tracking-widest text-gray-500">Status</label>
                   <select
                     className={styles.select}
                     value={editModal.values.status}
@@ -1382,7 +1556,7 @@ export default function AdminPage() {
                       )
                     }
                   >
-                    {["PENDING", "CONFIRMED", "PAID", "APPROVED", "EXPIRED", "CANCELLED", "DENIED"].map(
+                    {["PENDING", "CONFIRMED", "PAID", "APPROVED", "EXPIRED", "CANCELLED", "DENIED", "COMPLETE"].map(
                       (status) => (
                         <option key={status} value={status}>
                           {status}
@@ -1393,6 +1567,29 @@ export default function AdminPage() {
                   {getEditFieldError("status") && (
                     <p className={styles.fieldErrorText}>{getEditFieldError("status")}</p>
                   )}
+
+                  {editModal.type === "booking" && editModal.values.status === "PENDING" && (
+                    <>
+                      <label className="text-[11px] font-semibold uppercase tracking-widest text-amber-500">
+                        Expiry Date &amp; Time
+                        <span className="ml-1 normal-case text-gray-500 font-normal">(when this pending booking auto-expires)</span>
+                      </label>
+                      <input
+                        type="datetime-local"
+                        className={styles.input}
+                        value={editModal.values.expiresAt}
+                        onChange={(e) =>
+                          setEditModal((prev) =>
+                            prev && prev.type === "booking"
+                              ? { ...prev, values: { ...prev.values, expiresAt: e.target.value } }
+                              : prev
+                          )
+                        }
+                      />
+                    </>
+                  )}
+
+                  <label className="text-[11px] font-semibold uppercase tracking-widest text-gray-500">Payment Reference</label>
                   <input
                     className={styles.input}
                     placeholder="Payment reference"
@@ -1589,6 +1786,30 @@ export default function AdminPage() {
                   {getEditFieldError("status") && (
                     <p className={styles.fieldErrorText}>{getEditFieldError("status")}</p>
                   )}
+                  <input
+                    className={styles.input}
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    placeholder="Price"
+                    value={editModal.values.price}
+                    onChange={(e) =>
+                      setEditModal((prev) =>
+                        prev && prev.type === "court"
+                          ? {
+                              ...prev,
+                              values: {
+                                ...prev.values,
+                                price: e.target.value === "" ? 0 : Number(e.target.value),
+                              },
+                            }
+                          : prev
+                      )
+                    }
+                  />
+                  {getEditFieldError("price") && (
+                    <p className={styles.fieldErrorText}>{getEditFieldError("price")}</p>
+                  )}
                 </>
               )}
 
@@ -1614,6 +1835,311 @@ export default function AdminPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {selectedBooking && (
+        <div className={styles.modalOverlay} onClick={() => setSelectedBooking(null)}>
+          <div
+            className={styles.modalCard}
+            style={{ maxWidth: 560 }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h2 className={styles.modalHeader} style={{ margin: 0 }}>Booking Details</h2>
+              <button
+                type="button"
+                className="text-slate-400 hover:text-slate-700 text-xl leading-none"
+                onClick={() => setSelectedBooking(null)}
+                aria-label="Close"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-[13px]">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#6b9e84] mb-0.5">Customer Name</p>
+                <p className="text-gray-200 font-medium">{selectedBooking.customer?.name ?? "—"}</p>
+              </div>
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#6b9e84] mb-0.5">Email</p>
+                <p className="text-gray-200">{selectedBooking.customer?.email ?? "—"}</p>
+              </div>
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#6b9e84] mb-0.5">Contact Number</p>
+                <p className="text-gray-200">{selectedBooking.customer?.contactNumber ?? "—"}</p>
+              </div>
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#6b9e84] mb-0.5">Court</p>
+                <p className="text-gray-200">
+                  {courts.find((c) => c._id === selectedBooking.courtId)?.name ?? selectedBooking.courtId}
+                </p>
+              </div>
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#6b9e84] mb-0.5">Booking Date</p>
+                <p className="text-gray-200">{selectedBooking.bookingDate}</p>
+              </div>
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#6b9e84] mb-0.5">Time Slot</p>
+                <p className="text-gray-200">{selectedBooking.startTime} – {selectedBooking.endTime}</p>
+              </div>
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#6b9e84] mb-0.5">Status</p>
+                <span className={statusClassName(selectedBooking.status)}>{selectedBooking.status}</span>
+              </div>
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#6b9e84] mb-0.5">Payment Reference</p>
+                <p className="text-gray-200">{selectedBooking.paymentReference ?? "—"}</p>
+              </div>
+              {selectedBooking.denialReason && (
+                <div className="col-span-2">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-[#6b9e84] mb-0.5">Denial Reason</p>
+                  <p className="text-gray-200">{selectedBooking.denialReason}</p>
+                </div>
+              )}
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#6b9e84] mb-0.5">Booking ID</p>
+                <p className="text-[#7aab93] font-mono text-xs">{selectedBooking._id}</p>
+              </div>
+            </div>
+
+            <div className={styles.modalActions}>
+              <button
+                type="button"
+                className={`${styles.btn} ${styles.btnDanger}`}
+                onClick={() => {
+                  setDeleteModal({
+                    entity: "booking",
+                    id: selectedBooking._id,
+                    endpoint: `/api/admin/bookings/${selectedBooking._id}`,
+                    errorMessage: "Delete booking failed",
+                  });
+                  setSelectedBooking(null);
+                }}
+              >
+                Delete
+              </button>
+              <button
+                type="button"
+                className={`${styles.btn} ${styles.btnInfo}`}
+                onClick={() => {
+                  openEditModal({
+                    type: "booking",
+                    id: selectedBooking._id,
+                    values: {
+                      status: selectedBooking.status,
+                      paymentReference: selectedBooking.paymentReference ?? "",
+                      denialReason: selectedBooking.denialReason ?? "",
+                      confirmDenied: selectedBooking.status === "DENIED" ? "true" : "false",
+                      courtId: selectedBooking.courtId ?? "",
+                      bookingDate: selectedBooking.bookingDate ?? "",
+                      startTime: selectedBooking.startTime ?? "",
+                      endTime: selectedBooking.endTime ?? "",
+                      expiresAt: selectedBooking.expiresAt
+                        ? new Date(selectedBooking.expiresAt).toISOString().slice(0, 16)
+                        : new Date(Date.now() + 15 * 60_000).toISOString().slice(0, 16),
+                    },
+                  });
+                  setSelectedBooking(null);
+                }}
+              >
+                Edit
+              </button>
+              <button
+                type="button"
+                className={`${styles.btn} ${styles.btnDark}`}
+                onClick={() => setSelectedBooking(null)}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {selectedCustomer && (
+        <div className={styles.modalOverlay} onClick={() => setSelectedCustomer(null)}>
+          <div className={styles.modalCard} style={{ maxWidth: 480 }} onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className={styles.modalHeader} style={{ margin: 0 }}>Customer Details</h2>
+              <button type="button" className="text-slate-400 hover:text-slate-700 text-xl leading-none" onClick={() => setSelectedCustomer(null)} aria-label="Close">×</button>
+            </div>
+            <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-[13px]">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#6b9e84] mb-0.5">Name</p>
+                <p className="text-gray-200 font-medium">{selectedCustomer.name}</p>
+              </div>
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#6b9e84] mb-0.5">Contact Number</p>
+                <p className="text-gray-200">{selectedCustomer.contactNumber || "—"}</p>
+              </div>
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#6b9e84] mb-0.5">Email</p>
+                <p className="text-gray-200">{selectedCustomer.email || "—"}</p>
+              </div>
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#6b9e84] mb-0.5">Customer ID</p>
+                <p className="text-[#7aab93] font-mono text-xs">{selectedCustomer._id}</p>
+              </div>
+            </div>
+            <div className={styles.modalActions}>
+              <button type="button" className={`${styles.btn} ${styles.btnDanger}`} onClick={() => { setDeleteModal({ entity: "customer", id: selectedCustomer._id, endpoint: `/api/admin/customers/${selectedCustomer._id}`, errorMessage: "Delete failed" }); setSelectedCustomer(null); }}>Delete</button>
+              <button type="button" className={`${styles.btn} ${styles.btnInfo}`} onClick={() => { openEditModal({ type: "customer", id: selectedCustomer._id, values: { name: selectedCustomer.name, contactNumber: selectedCustomer.contactNumber, email: selectedCustomer.email } }); setSelectedCustomer(null); }}>Edit</button>
+              <button type="button" className={`${styles.btn} ${styles.btnDark}`} onClick={() => setSelectedCustomer(null)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {selectedUser && (
+        <div className={styles.modalOverlay} onClick={() => setSelectedUser(null)}>
+          <div className={styles.modalCard} style={{ maxWidth: 480 }} onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className={styles.modalHeader} style={{ margin: 0 }}>User Details</h2>
+              <button type="button" className="text-slate-400 hover:text-slate-700 text-xl leading-none" onClick={() => setSelectedUser(null)} aria-label="Close">×</button>
+            </div>
+            <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-[13px]">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#6b9e84] mb-0.5">Username</p>
+                <p className="text-gray-200 font-medium">{selectedUser.username}</p>
+              </div>
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#6b9e84] mb-0.5">Name</p>
+                <p className="text-gray-200">{selectedUser.name}</p>
+              </div>
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#6b9e84] mb-0.5">Email</p>
+                <p className="text-gray-200">{selectedUser.email || "—"}</p>
+              </div>
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#6b9e84] mb-0.5">Role</p>
+                <p className="text-gray-200">{selectedUser.role}</p>
+              </div>
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#6b9e84] mb-0.5">Status</p>
+                <span className={selectedUser.isActive ? `${styles.status} ${styles.statusApproved}` : `${styles.status} ${styles.statusCancelled}`}>{selectedUser.isActive ? "Active" : "Inactive"}</span>
+              </div>
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#6b9e84] mb-0.5">User ID</p>
+                <p className="text-[#7aab93] font-mono text-xs">{selectedUser._id}</p>
+              </div>
+            </div>
+
+            <ChangePasswordSection userId={selectedUser._id} />
+
+            <div className={styles.modalActions}>
+              <button type="button" className={`${styles.btn} ${styles.btnDanger}`} onClick={() => { setDeleteModal({ entity: "user", id: selectedUser._id, endpoint: `/api/admin/users/${selectedUser._id}`, errorMessage: "Delete user failed" }); setSelectedUser(null); }}>Delete</button>
+              <button type="button" className={`${styles.btn} ${styles.btnInfo}`} onClick={() => { openEditModal({ type: "user", id: selectedUser._id, values: { name: selectedUser.name, email: selectedUser.email, role: selectedUser.role, isActive: selectedUser.isActive ? "true" : "false" } }); setSelectedUser(null); }}>Edit</button>
+              <button type="button" className={`${styles.btn} ${styles.btnDark}`} onClick={() => setSelectedUser(null)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {selectedCourt && (
+        <div className={styles.modalOverlay} onClick={() => setSelectedCourt(null)}>
+          <div className={styles.modalCard} style={{ maxWidth: 480 }} onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className={styles.modalHeader} style={{ margin: 0 }}>Court Details</h2>
+              <button type="button" className="text-slate-400 hover:text-slate-700 text-xl leading-none" onClick={() => setSelectedCourt(null)} aria-label="Close">×</button>
+            </div>
+            <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-[13px]">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#6b9e84] mb-0.5">Court Name</p>
+                <p className="text-gray-200 font-medium">{selectedCourt.name}</p>
+              </div>
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#6b9e84] mb-0.5">Surface Type</p>
+                <p className="text-gray-200 capitalize">{selectedCourt.surfaceType}</p>
+              </div>
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#6b9e84] mb-0.5">Status</p>
+                <span className={statusClassName(selectedCourt.status === "active" ? "APPROVED" : "EXPIRED")}>{selectedCourt.status}</span>
+              </div>
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#6b9e84] mb-0.5">Price</p>
+                <p className="text-gray-200 font-medium">{Number(selectedCourt.price ?? 0).toFixed(2)}</p>
+              </div>
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#6b9e84] mb-0.5">Court ID</p>
+                <p className="text-[#7aab93] font-mono text-xs">{selectedCourt._id}</p>
+              </div>
+            </div>
+            <div className={styles.modalActions}>
+              <button type="button" className={`${styles.btn} ${styles.btnDanger}`} onClick={() => { setDeleteModal({ entity: "court", id: selectedCourt._id, endpoint: `/api/admin/courts/${selectedCourt._id}`, errorMessage: "Delete court failed" }); setSelectedCourt(null); }}>Delete</button>
+              <button type="button" className={`${styles.btn} ${styles.btnInfo}`} onClick={() => { openEditModal({ type: "court", id: selectedCourt._id, values: { name: selectedCourt.name, surfaceType: selectedCourt.surfaceType, status: selectedCourt.status, price: selectedCourt.price ?? 0 } }); setSelectedCourt(null); }}>Edit</button>
+              <button type="button" className={`${styles.btn} ${styles.btnDark}`} onClick={() => setSelectedCourt(null)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {selectedAbuseLog && (
+        <div className={styles.modalOverlay} onClick={() => setSelectedAbuseLog(null)}>
+          <div className={styles.modalCard} style={{ maxWidth: 480 }} onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className={styles.modalHeader} style={{ margin: 0 }}>Abuse Log Details</h2>
+              <button type="button" className="text-slate-400 hover:text-slate-700 text-xl leading-none" onClick={() => setSelectedAbuseLog(null)} aria-label="Close">×</button>
+            </div>
+            <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-[13px]">
+              {!!(selectedAbuseLog.metadata?.customerName || selectedAbuseLog.metadata?.contactNumber || selectedAbuseLog.metadata?.email) && (
+                <div className="col-span-2 rounded-lg border border-emerald-700/30 bg-emerald-900/10 px-3 py-2">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-[#6b9e84] mb-1">Customer</p>
+                  {!!selectedAbuseLog.metadata?.customerName && (
+                    <p className="text-gray-200 font-medium">{String(selectedAbuseLog.metadata.customerName)}</p>
+                  )}
+                  {!selectedAbuseLog.metadata?.customerName && !!selectedAbuseLog.metadata?.contactNumber && (
+                    <p className="text-gray-400 text-xs">(name not recorded)</p>
+                  )}
+                  {!!selectedAbuseLog.metadata?.email && (
+                    <p className="text-gray-400 text-xs mt-0.5">{String(selectedAbuseLog.metadata.email)}</p>
+                  )}
+                  {!!selectedAbuseLog.metadata?.contactNumber && (
+                    <p className="text-gray-400 text-xs mt-0.5">📞 {String(selectedAbuseLog.metadata.contactNumber)}</p>
+                  )}
+                </div>
+              )}
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#6b9e84] mb-0.5">Time</p>
+                <p className="text-gray-200">{new Date(selectedAbuseLog.createdAt).toLocaleString()}</p>
+              </div>
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#6b9e84] mb-0.5">IP Address</p>
+                <p className="text-gray-200 font-mono">{selectedAbuseLog.ipAddress}</p>
+              </div>
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#6b9e84] mb-0.5">Abuse Type</p>
+                <span className={statusClassName(selectedAbuseLog.abuseType)}>{selectedAbuseLog.abuseType}</span>
+              </div>
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#6b9e84] mb-0.5">Log ID</p>
+                <p className="text-[#7aab93] font-mono text-xs">{selectedAbuseLog._id}</p>
+              </div>
+              <div className="col-span-2">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#6b9e84] mb-0.5">Message</p>
+                <p className="text-gray-200 wrap-break-word">{selectedAbuseLog.message}</p>
+              </div>
+            </div>
+            <div className={styles.modalActions}>
+              <button type="button" className={`${styles.btn} ${styles.btnDark}`} onClick={() => setSelectedAbuseLog(null)}>Close</button>
+              <button
+                type="button"
+                className={`${styles.btn} ${styles.btnDanger}`}
+                onClick={() => {
+                  setDeleteModal({
+                    entity: "abuse-log",
+                    id: selectedAbuseLog._id,
+                    endpoint: `/api/admin/abuse-logs/${selectedAbuseLog._id}`,
+                    errorMessage: "Failed to delete abuse log",
+                  });
+                  setSelectedAbuseLog(null);
+                }}
+              >
+                Delete
+              </button>
+            </div>
           </div>
         </div>
       )}

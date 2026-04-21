@@ -1,20 +1,20 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-  color-scheme: light;
+  --background: #0B0F1A;
+  --foreground: #F9FAFB;
+  color-scheme: dark;
 
   /* ── Booking design tokens ── */
-  --color-background-primary:   #ffffff;
-  --color-background-secondary: #f0faf6;
-  --color-background-tertiary:  #edf7f2;
-  --color-text-primary:         #0d2418;
-  --color-text-secondary:       #3b6b53;
-  --color-border-secondary:     #afd1c2;
-  --color-border-tertiary:      #d2ece3;
-  --color-background-danger:    #fef2f2;
-  --color-text-danger:          #b91c1c;
+  --color-background-primary:   #111827;
+  --color-background-secondary: #1F2937;
+  --color-background-tertiary:  #374151;
+  --color-text-primary:         #F9FAFB;
+  --color-text-secondary:       #9CA3AF;
+  --color-border-secondary:     #374151;
+  --color-border-tertiary:      #1F2937;
+  --color-background-danger:    rgba(239, 68, 68, 0.12);
+  --color-text-danger:          #FCA5A5;
   --border-radius-md:           8px;
   --border-radius-lg:           14px;
   --color-background: var(--background);
@@ -22,6 +22,102 @@
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
+
+/* ════════════ Light theme ════════════ */
+[data-theme="light"] {
+  color-scheme: light;
+  --background: #f1f5f9;
+  --foreground: #0f172a;
+  --color-background-primary:   #ffffff;
+  --color-background-secondary: #f8fafc;
+  --color-background-tertiary:  #f1f5f9;
+  --color-text-primary:         #0f172a;
+  --color-text-secondary:       #64748b;
+  --color-border-secondary:     #e2e8f0;
+  --color-border-tertiary:      #f1f5f9;
+}
+
+/* ── Background overrides ── */
+[data-theme="light"] .bg-\[\#0B0F1A\]  { background-color: #f1f5f9; }
+/* Sidebar stays intentionally dark — dark sidebar on light content is standard UX */
+[data-theme="light"] .bg-\[\#060B14\]  { background-color: #0f172a; }
+[data-theme="light"] .bg-\[\#111827\]  { background-color: #ffffff; }
+[data-theme="light"] .bg-\[\#1F2937\]  { background-color: #f8fafc; }
+[data-theme="light"] .bg-\[\#161d29\]  { background-color: #f0f4f8; }
+[data-theme="light"] .bg-\[\#1a2235\]  { background-color: #eff6ff; }
+[data-theme="light"] .bg-\[\#263041\]  { background-color: #e0e7ff; }
+[data-theme="light"] .bg-\[\#1E3A5F\]  { background-color: #dbeafe; }
+[data-theme="light"] .bg-\[\#0f2a1e\]\! { background-color: #ecfdf5 !important; }
+[data-theme="light"] .bg-gray-700      { background-color: #e2e8f0; }
+[data-theme="light"] .bg-\[\#0B0F1A\]  { background-color: #f1f5f9; }
+
+/* ── Hover overrides ── */
+[data-theme="light"] .hover\:bg-\[\#1a2235\]:hover { background-color: #e2e8f0; }
+[data-theme="light"] .hover\:bg-\[\#263041\]:hover  { background-color: #c7d2fe; }
+[data-theme="light"] .hover\:bg-amber-950\/40:hover { background-color: rgba(254,215,170,0.5); }
+
+/* ── Text overrides — gray scale ── */
+[data-theme="light"] .text-gray-100 { color: #0f172a; }
+[data-theme="light"] .text-gray-200 { color: #1e293b; }
+[data-theme="light"] .text-gray-300 { color: #334155; }
+[data-theme="light"] .text-gray-400 { color: #475569; }
+[data-theme="light"] .text-gray-500 { color: #64748b; }
+[data-theme="light"] .text-gray-600 { color: #475569; }
+[data-theme="light"] .text-gray-700 { color: #334155; }
+[data-theme="light"] .text-gray-800 { color: #1e293b; }
+[data-theme="light"] .text-gray-900 { color: #0f172a; }
+
+/* ── Text overrides — slate scale ── */
+[data-theme="light"] .text-slate-400 { color: #64748b; }
+[data-theme="light"] .text-slate-500 { color: #475569; }
+[data-theme="light"] .text-slate-600 { color: #334155; }
+[data-theme="light"] .text-slate-700 { color: #1e293b; }
+[data-theme="light"] .text-slate-800 { color: #0f172a; }
+
+/* ── Text overrides — special ── */
+[data-theme="light"] .text-\[\#E2E8F0\] { color: #1e40af; }
+
+/* ── Border overrides ── */
+[data-theme="light"] .border-gray-700      { border-color: #e2e8f0; }
+[data-theme="light"] .border-gray-700\/60  { border-color: rgba(226,232,240,0.6); }
+[data-theme="light"] .border-gray-600      { border-color: #cbd5e1; }
+[data-theme="light"] .border-white\/10     { border-color: rgba(0,0,0,0.08); }
+[data-theme="light"] .border-\[\#10B981\]\! { border-color: #059669 !important; }
+
+/* ── Pending row tint ── */
+[data-theme="light"] .bg-amber-950\/20 { background-color: rgba(254,243,199,0.5); }
+
+/* ── Status / feedback banners ── */
+[data-theme="light"] .bg-red-900\/20        { background-color: rgba(254,226,226,0.8); }
+[data-theme="light"] .border-red-700\/40    { border-color: rgba(220,38,38,0.3); }
+[data-theme="light"] .bg-red-600\/20        { background-color: rgba(254,202,202,0.6); }
+[data-theme="light"] .border-red-500\/40    { border-color: rgba(239,68,68,0.4); }
+[data-theme="light"] .bg-emerald-900\/20    { background-color: rgba(209,250,229,0.8); }
+[data-theme="light"] .border-emerald-700\/40 { border-color: rgba(16,185,129,0.3); }
+
+/* ── Badge tints ── */
+[data-theme="light"] .bg-emerald-900\/40   { background-color: rgba(209,250,229,0.9); }
+[data-theme="light"] .bg-amber-900\/30     { background-color: rgba(254,243,199,0.9); }
+[data-theme="light"] .ring-emerald-700\/50 { --tw-ring-color: rgba(16,185,129,0.4); }
+[data-theme="light"] .ring-amber-700\/40   { --tw-ring-color: rgba(217,119,6,0.3); }
+
+/* ── Status tab count pill ── */
+[data-theme="light"] .bg-slate-100 { background-color: #e2e8f0; }
+
+/* ── Modal overlays (DenyModal, MarkPaidModal, ErrorModal) ── */
+[data-theme="light"] .bg-\[\#1F2937\].rounded-xl,
+[data-theme="light"] .bg-\[\#1F2937\].rounded-xl * {
+  /* Inherit from bg override above — #f8fafc */
+}
+/* ── Sidebar: keep white text since bg stays dark ── */
+[data-theme="light"] aside .text-gray-400 { color: #e2e8f0; }
+[data-theme="light"] aside .text-gray-200 { color: #f1f5f9; }
+[data-theme="light"] aside .text-emerald-400 { color: #34d399; }
+/* Active tab (emerald bg) must always be pure white */
+[data-theme="light"] aside .bg-emerald-600.text-gray-400,
+[data-theme="light"] aside .bg-emerald-600 { color: #ffffff; }
+
+[data-theme="light"] .text-\[\#10B981\] { color: #059669; }
 
 body {
   background: var(--background);

@@ -39,16 +39,16 @@ export default function CustomerReportList() {
           <li
             key={report.id}
             style={{
-              background: '#f1f5f9',
+              background: '#1F2937',
               borderRadius: '0.7rem',
               marginBottom: '1.2rem',
               padding: '1.2rem 1rem',
-              boxShadow: '0 1px 4px rgba(30,41,59,0.04)',
-              borderLeft: '4px solid #2563eb',
+              boxShadow: '0 1px 4px rgba(0,0,0,0.3)',
+              borderLeft: '4px solid #10B981',
             }}
           >
-            <div style={{ fontWeight: 600, color: '#1e293b', fontSize: '1.1rem' }}>{report.customer}</div>
-            <div style={{ color: '#334155', margin: '0.5rem 0 0.7rem 0' }}>{report.message}</div>
+            <div style={{ fontWeight: 600, color: '#e2e8f0', fontSize: '1.1rem' }}>{report.customer}</div>
+            <div style={{ color: '#94a3b8', margin: '0.5rem 0 0.7rem 0' }}>{report.message}</div>
             <div style={{ fontSize: '0.9rem', color: '#64748b', textAlign: 'right' }}>
               {new Date(report.createdAt).toLocaleString()}
             </div>

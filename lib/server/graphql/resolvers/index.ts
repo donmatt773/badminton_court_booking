@@ -191,6 +191,8 @@ export const resolvers = {
             abuseType: "DUPLICATE_BOOKING",
             message: "Repeated booking attempt from same contact",
             metadata: {
+              customerName: parsed.name,
+              email: parsed.email,
               contactNumber: parsed.contactNumber,
               windowMinutes: graphQLEnv.DUPLICATE_WINDOW_MINUTES,
             },
@@ -226,6 +228,8 @@ export const resolvers = {
           endTime: parsed.endTime,
           status: "PENDING",
           expiresAt,
+          ...(parsed.paymentMethod ? { paymentMethod: parsed.paymentMethod } : {}),
+          ...(parsed.paymentProofImage ? { paymentProofImage: parsed.paymentProofImage } : {}),
         });
 
         const populated = await booking.populate("customer");

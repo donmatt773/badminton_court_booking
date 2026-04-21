@@ -21,6 +21,12 @@ const courtSchema = new Schema(
       required: true,
       default: "active",
     },
+    price: {
+      type: Number,
+      required: true,
+      min: 0,
+      default: 0,
+    },
   },
   {
     timestamps: true,
@@ -33,7 +39,8 @@ if (
   existingCourtModel &&
   (existingCourtModel.schema.path("code") ||
     !existingCourtModel.schema.path("surfaceType") ||
-    !existingCourtModel.schema.path("status"))
+    !existingCourtModel.schema.path("status") ||
+    !existingCourtModel.schema.path("price"))
 ) {
   delete models.Court;
 }

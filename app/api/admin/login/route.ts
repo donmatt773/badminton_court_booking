@@ -49,6 +49,17 @@ export async function POST(request: Request): Promise<Response> {
       },
     });
   } catch (error) {
+    if (error instanceof z.ZodError) {
+      return Response.json(
+        {
+          error: {
+            message: "Please enter both username and password.",
+          },
+        },
+        { status: 400 }
+      );
+    }
+
     return Response.json(
       {
         error: {

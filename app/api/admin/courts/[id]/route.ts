@@ -9,6 +9,7 @@ const updateSchema = z.object({
   name: z.string().min(2).optional(),
   surfaceType: z.enum(["wooden", "rubber"]).optional(),
   status: z.enum(["active", "inactive", "maintenance"]).optional(),
+  price: z.coerce.number().min(0).optional(),
 });
 
 export async function GET(
@@ -45,7 +46,10 @@ export async function PUT(
 ): Promise<Response> {
   try {
     await ensureGraphQLRuntimeStarted();
-    await requireAdminSession();
+    const session = await requireAdminSession();
+    if (session.role !== "ADMIN") {
+      return Response.json({ error: { message: "Forbidden" } }, { status: 403 });
+    }
 
     const { id } = await context.params;
     const body = updateSchema.parse(await request.json());
@@ -72,7 +76,10 @@ export async function DELETE(
 ): Promise<Response> {
   try {
     await ensureGraphQLRuntimeStarted();
-    await requireAdminSession();
+    const session = await requireAdminSession();
+    if (session.role !== "ADMIN") {
+      return Response.json({ error: { message: "Forbidden" } }, { status: 403 });
+    }
 
     const { id } = await context.params;
     const deleted = await CourtModel.findByIdAndDelete(id);

@@ -31,7 +31,18 @@ function formatTime12h(time: string): string {
 }
 
 function todayISODate(): string {
-  return new Date().toISOString().slice(0, 10);
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function currentTimeHHMM(): string {
+  const now = new Date();
+  const hours = String(now.getHours()).padStart(2, "0");
+  const minutes = String(now.getMinutes()).padStart(2, "0");
+  return `${hours}:${minutes}`;
 }
 
 type NewBlockForm = {
@@ -50,6 +61,9 @@ export function BlockedSlotManager() {
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [popupMessage, setPopupMessage] = useState<string | null>(null);
+
+  const today = todayISODate();
+  const nowTime = currentTimeHHMM();
 
   const [form, setForm] = useState<NewBlockForm>({
     courtIds: [],
@@ -147,6 +161,11 @@ export function BlockedSlotManager() {
       return;
     }
 
+    if (form.bookingDate === today && form.startTime < nowTime) {
+      setError("Start time cannot be in the past");
+      return;
+    }
+
     setIsSaving(true);
     setError(null);
     setSuccessMessage(null);
@@ -228,14 +247,14 @@ export function BlockedSlotManager() {
     <div className="w-full" style={{ maxWidth: "1900px" }}>
       {popupMessage ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-md rounded-xl bg-white p-5 shadow-2xl">
-            <h3 className="mb-2 text-lg font-semibold text-slate-800">Blocking Notice</h3>
-            <p className="mb-4 text-sm text-slate-600">{popupMessage}</p>
+          <div className="w-full max-w-md rounded-xl bg-[#1F2937] p-5 shadow-2xl">
+            <h3 className="mb-2 text-lg font-semibold text-gray-100">Blocking Notice</h3>
+            <p className="mb-4 text-sm text-gray-300">{popupMessage}</p>
             <div className="flex justify-end">
               <button
                 type="button"
                 onClick={() => setPopupMessage(null)}
-                className="px-4 py-2 rounded-lg bg-[#1D9E75] text-white text-sm font-semibold hover:bg-[#17876a]"
+                className="px-4 py-2 rounded-lg bg-[#10B981] text-white text-sm font-semibold hover:bg-[#059669]"
               >
                 OK
               </button>
@@ -244,7 +263,7 @@ export function BlockedSlotManager() {
         </div>
       ) : null}
 
-      <div className="text-lg font-semibold text-slate-700 mb-3 border-b border-slate-200 pb-2">
+      <div className="text-lg font-semibold text-gray-200 mb-3 border-b border-gray-700 pb-2">
         Booking Blocks
         <p className="mt-1 text-sm text-slate-500 font-normal">
           Prevent selected courts from being booked at specific times.
@@ -253,22 +272,22 @@ export function BlockedSlotManager() {
 
       <form
         onSubmit={handleCreateBlock}
-        className="mb-4 grid gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 md:grid-cols-5"
+        className="mb-4 grid gap-2 rounded-lg border border-gray-700 bg-[#111827] p-3 md:grid-cols-5"
       >
-        <div className="md:col-span-5 rounded border border-slate-300 bg-white p-2">
+        <div className="md:col-span-5 rounded border border-slate-300 bg-[#1F2937] p-2">
           <div className="mb-2 flex items-center justify-between">
-            <span className="text-sm font-medium text-slate-700">Select courts ({form.courtIds.length})</span>
+            <span className="text-sm font-medium text-gray-200">Select courts ({form.courtIds.length})</span>
             <div className="flex gap-2">
               <button
                 type="button"
-                className="px-2 py-0.5 rounded border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                className="px-2 py-0.5 rounded border border-slate-300 text-xs font-semibold text-gray-200 hover:bg-slate-100"
                 onClick={() => setForm((prev) => ({ ...prev, courtIds: courts.map((court) => court._id) }))}
               >
                 Select all
               </button>
               <button
                 type="button"
-                className="px-2 py-0.5 rounded border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                className="px-2 py-0.5 rounded border border-slate-300 text-xs font-semibold text-gray-200 hover:bg-slate-100"
                 onClick={() => setForm((prev) => ({ ...prev, courtIds: [] }))}
               >
                 Clear
@@ -279,7 +298,7 @@ export function BlockedSlotManager() {
             {courts.map((court) => {
               const checked = form.courtIds.includes(court._id);
               return (
-                <label key={court._id} className="flex items-center gap-2 text-sm text-slate-700">
+                <label key={court._id} className="flex items-center gap-2 text-sm text-gray-200">
                   <input
                     type="checkbox"
                     checked={checked}
@@ -304,7 +323,7 @@ export function BlockedSlotManager() {
           type="date"
           value={form.bookingDate}
           onChange={(e) => setForm((prev) => ({ ...prev, bookingDate: e.target.value }))}
-          className="rounded border border-slate-300 px-2 py-2 text-sm"
+          className="rounded border border-gray-600 bg-[#1F2937] text-gray-200 px-2 py-2 text-sm"
           required
         />
 
@@ -312,7 +331,8 @@ export function BlockedSlotManager() {
           type="time"
           value={form.startTime}
           onChange={(e) => setForm((prev) => ({ ...prev, startTime: e.target.value }))}
-          className="rounded border border-slate-300 px-2 py-2 text-sm"
+          min={form.bookingDate === today ? nowTime : undefined}
+          className="rounded border border-gray-600 bg-[#1F2937] text-gray-200 px-2 py-2 text-sm"
           required
         />
 
@@ -320,7 +340,14 @@ export function BlockedSlotManager() {
           type="time"
           value={form.endTime}
           onChange={(e) => setForm((prev) => ({ ...prev, endTime: e.target.value }))}
-          className="rounded border border-slate-300 px-2 py-2 text-sm"
+          min={
+            form.bookingDate === today
+              ? form.startTime > nowTime
+                ? form.startTime
+                : nowTime
+              : form.startTime
+          }
+          className="rounded border border-gray-600 bg-[#1F2937] text-gray-200 px-2 py-2 text-sm"
           required
         />
 
@@ -328,7 +355,7 @@ export function BlockedSlotManager() {
           type="text"
           value={form.reason}
           onChange={(e) => setForm((prev) => ({ ...prev, reason: e.target.value }))}
-          className="rounded border border-slate-300 px-2 py-2 text-sm"
+          className="rounded border border-gray-600 bg-[#1F2937] text-gray-200 px-2 py-2 text-sm"
           placeholder="Reason (optional)"
           maxLength={200}
         />
@@ -336,28 +363,28 @@ export function BlockedSlotManager() {
         <button
           type="submit"
           disabled={isSaving || isLoading}
-          className="md:col-span-5 rounded-lg bg-[#1D9E75] px-4 py-2 text-sm font-semibold text-white hover:bg-[#17876a] disabled:cursor-not-allowed disabled:opacity-70"
+          className="md:col-span-5 rounded-lg bg-[#10B981] px-4 py-2 text-sm font-semibold text-white hover:bg-[#059669] disabled:cursor-not-allowed disabled:opacity-70"
         >
           {isSaving ? "Saving blocks..." : "Add blocked slot(s)"}
         </button>
       </form>
 
       {isLoading ? (
-        <p className="text-[#1D9E75] font-medium mb-4">Loading...</p>
+        <p className="text-[#10B981] font-medium mb-4">Loading...</p>
       ) : null}
 
       {error ? (
-        <p className="text-red-600 bg-red-50 rounded-md px-4 py-2 mb-4 font-medium">{error}</p>
+        <p className="text-red-400 bg-red-900/20 border border-red-700/40 rounded-md px-4 py-2 mb-4 font-medium">{error}</p>
       ) : null}
 
       {successMessage ? (
-        <p className="text-green-700 bg-green-50 rounded-md px-4 py-2 mb-4 font-medium">{successMessage}</p>
+        <p className="text-emerald-400 bg-emerald-900/20 border border-emerald-700/40 rounded-md px-4 py-2 mb-4 font-medium">{successMessage}</p>
       ) : null}
 
       <div style={{ overflowX: "auto" }}>
-        <table className="w-full border-collapse bg-white rounded-xl shadow text-sm" style={{ minWidth: "1100px" }}>
+        <table className="w-full border-collapse bg-[#1F2937] rounded-xl shadow text-sm" style={{ minWidth: "1100px" }}>
           <thead>
-            <tr className="bg-slate-100 text-slate-700">
+            <tr className="bg-[#0B0F1A] text-gray-400">
               <th className="px-2 py-2 font-semibold text-left whitespace-nowrap">Court</th>
               <th className="px-2 py-2 font-semibold text-left whitespace-nowrap">Date</th>
               <th className="px-2 py-2 font-semibold text-left whitespace-nowrap">Start</th>
@@ -376,13 +403,13 @@ export function BlockedSlotManager() {
               </tr>
             ) : null}
             {blockedSlots.map((slot) => (
-              <tr key={slot._id} className="border-b border-slate-200 last:border-b-0">
-                <td className="px-2 py-2 text-slate-800 whitespace-nowrap">{courtNameById[slot.courtId] ?? slot.courtId}</td>
-                <td className="px-2 py-2 text-slate-800 whitespace-nowrap">{slot.bookingDate}</td>
-                <td className="px-2 py-2 text-slate-800 whitespace-nowrap">{formatTime12h(slot.startTime)}</td>
-                <td className="px-2 py-2 text-slate-800 whitespace-nowrap">{formatTime12h(slot.endTime)}</td>
-                <td className="px-2 py-2 text-slate-800">{slot.reason || "-"}</td>
-                <td className="px-2 py-2 text-slate-800 whitespace-nowrap">{new Date(slot.createdAt).toLocaleString()}</td>
+              <tr key={slot._id} className="border-b border-gray-700 last:border-b-0">
+                <td className="px-2 py-2 text-gray-100 whitespace-nowrap">{courtNameById[slot.courtId] ?? slot.courtId}</td>
+                <td className="px-2 py-2 text-gray-100 whitespace-nowrap">{slot.bookingDate}</td>
+                <td className="px-2 py-2 text-gray-100 whitespace-nowrap">{formatTime12h(slot.startTime)}</td>
+                <td className="px-2 py-2 text-gray-100 whitespace-nowrap">{formatTime12h(slot.endTime)}</td>
+                <td className="px-2 py-2 text-gray-100">{slot.reason || "-"}</td>
+                <td className="px-2 py-2 text-gray-100 whitespace-nowrap">{new Date(slot.createdAt).toLocaleString()}</td>
                 <td className="px-2 py-2">
                   <button
                     type="button"

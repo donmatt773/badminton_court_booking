@@ -70,18 +70,18 @@ function formatDisplayDate(value: string) {
 function getStatusClasses(status: string) {
   switch (status) {
     case "PENDING":
-      return "bg-amber-50 text-amber-800 ring-1 ring-amber-200";
+      return "bg-amber-100 text-amber-800 ring-1 ring-amber-300 dark:bg-amber-500/20 dark:text-amber-300 dark:ring-amber-500/30";
     case "CONFIRMED":
     case "PAID":
     case "APPROVED":
-      return "bg-emerald-50 text-emerald-800 ring-1 ring-emerald-200";
+      return "bg-emerald-100 text-emerald-800 ring-1 ring-emerald-300 dark:bg-emerald-500/20 dark:text-emerald-300 dark:ring-emerald-500/30";
     case "EXPIRED":
-      return "bg-slate-100 text-slate-600 ring-1 ring-slate-200";
+      return "bg-slate-100 text-slate-700 ring-1 ring-slate-300 dark:bg-slate-500/20 dark:text-slate-300 dark:ring-slate-500/30";
     case "CANCELLED":
     case "DENIED":
-      return "bg-red-50 text-red-700 ring-1 ring-red-200";
+      return "bg-red-100 text-red-800 ring-1 ring-red-300 dark:bg-red-500/20 dark:text-red-300 dark:ring-red-500/30";
     default:
-      return "bg-slate-100 text-slate-700 ring-1 ring-slate-200";
+      return "bg-slate-100 text-slate-700 ring-1 ring-slate-300 dark:bg-slate-500/20 dark:text-slate-200 dark:ring-slate-500/30";
   }
 }
 
@@ -89,6 +89,7 @@ export const ScheduleCalendar: FC = () => {
   const [events, setEvents] = useState<BookingEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [selectedDay, setSelectedDay] = useState<DaySelection | null>(null);
   const [selectedBooking, setSelectedBooking] = useState<BookingEvent | null>(null);
   const [current, setCurrent] = useState(() => {
     const now = new Date();
@@ -101,7 +102,7 @@ export const ScheduleCalendar: FC = () => {
 
     try {
       setError(null);
-      const res = await fetch("/api/admin/bookings");
+      const res = await fetch("/api/admin/bookings", { credentials: "include" });
       if (!res.ok) {
         throw new Error("Failed to fetch bookings");
       }
@@ -202,17 +203,17 @@ export const ScheduleCalendar: FC = () => {
   return (
     <div className="w-full">
       <div className="flex items-center justify-between mb-3">
-        <button className="px-2 py-0.5 rounded bg-slate-200 hover:bg-slate-300" onClick={prevMonth}>&lt;</button>
-        <div className="text-lg font-semibold">{monthNames[current.month]} {current.year}</div>
-        <button className="px-2 py-0.5 rounded bg-slate-200 hover:bg-slate-300" onClick={nextMonth}>&gt;</button>
+        <button className="px-2.5 py-1 rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 text-sm dark:bg-[#1F2937] dark:border-gray-700 dark:text-gray-300 dark:hover:bg-[#263041]" onClick={prevMonth}>&lt;</button>
+        <div className="text-base font-semibold text-gray-200">{monthNames[current.month]} {current.year}</div>
+        <button className="px-2.5 py-1 rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 text-sm dark:bg-[#1F2937] dark:border-gray-700 dark:text-gray-300 dark:hover:bg-[#263041]" onClick={nextMonth}>&gt;</button>
       </div>
       <div className="overflow-x-auto">
-        <div className="grid grid-cols-7 gap-px bg-slate-100 rounded-t-lg" style={{ minWidth: "1200px" }}>
+        <div className="grid grid-cols-7 gap-px bg-[#0B0F1A] rounded-t-lg">
           {dayNames.map((d) => (
-            <div key={d} className="text-center py-1 font-medium text-slate-600 text-sm">{d}</div>
+            <div key={d} className="text-center py-1.5 font-semibold text-gray-400 text-xs uppercase tracking-wide">{d}</div>
           ))}
         </div>
-        <div className="grid grid-cols-7 gap-px bg-white rounded-b-lg border border-slate-200" style={{ minWidth: "1200px" }}>
+        <div className="grid grid-cols-7 gap-px bg-[#1F2937] rounded-b-lg border border-gray-700">
           {weeks.flat().map((dayEvents, idx) => {
             const dayNum = idx - firstDay + 1;
             const isCurrentMonthDay = dayNum > 0 && dayNum <= daysInMonth;
@@ -228,35 +229,44 @@ export const ScheduleCalendar: FC = () => {
               <div
                 key={idx}
                 className={[
-                  "min-h-28 border border-slate-100 p-2 relative transition-colors",
-                  isCurrentMonthDay ? "bg-white" : "bg-slate-50/70",
-                  isToday ? "bg-[#f4f9f7] border-[#1D9E75]" : "",
-                  hasBookings ? "hover:bg-[#f7fbf9]" : "",
+                  "min-h-16 border border-gray-700/60 p-1 relative transition-colors",
+                  isCurrentMonthDay ? "bg-[#1F2937]" : "bg-[#161d29]",
+                  isToday ? "bg-[#0f2a1e]! border-[#10B981]!" : "",
+                  hasBookings && !isToday ? "hover:bg-[#263041]" : "",
                 ].join(" ")}
               >
-                <div className="mb-2 flex items-center justify-between">
-                  <div className="text-sm font-bold text-slate-700">
+                <div className="mb-1 flex items-center justify-between">
+                  <div className={`text-xs font-bold ${isToday ? "text-[#10B981]" : "text-gray-300"}`}>
                     {isCurrentMonthDay ? dayNum : ""}
                   </div>
                   {hasBookings && (
-                    <span className="rounded-full bg-[#edf7f2] px-2 py-0.5 text-[10px] font-semibold text-[#1D9E75]">
+                    <span className="rounded-full bg-emerald-100 px-1.5 py-px text-[9px] font-semibold text-emerald-800 dark:bg-[#1E3A5F] dark:text-[#10B981]">
                       {dayEvents.length}
                     </span>
                   )}
                 </div>
                 {hasBookings && (
-                  <div className="flex flex-col gap-1">
-                    {dayEvents.map((ev) => (
+                  <div className="flex flex-col gap-0.5">
+                    {dayEvents.slice(0, 2).map((ev) => (
                       <button
                         key={ev._id}
                         type="button"
-                        className="rounded bg-[#edf7f2] px-2 py-1 text-left text-sm font-medium text-[#0d2418] truncate hover:bg-[#dff1e9] hover:text-[#17876a]"
+                        className="w-full truncate rounded bg-emerald-100 px-1 py-0.5 text-left text-[10px] font-medium text-emerald-900 hover:bg-emerald-200 dark:bg-[#1E3A5F] dark:text-[#E2E8F0] dark:hover:bg-emerald-900/40 dark:hover:text-[#059669]"
                         title={ev.customerName}
                         onClick={() => setSelectedBooking(ev)}
                       >
-                        {ev.customerName}
+                        {ev.customerName.split(" ")[0]}
                       </button>
                     ))}
+                    {dayEvents.length > 2 && (
+                      <button
+                        type="button"
+                        className="pl-1 text-left text-[9px] text-emerald-700 hover:text-emerald-800 dark:text-emerald-400 dark:hover:text-emerald-300"
+                        onClick={() => setSelectedDay({ date: dateStr, bookings: dayEvents })}
+                      >
+                        +{dayEvents.length - 2} more
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -264,8 +274,65 @@ export const ScheduleCalendar: FC = () => {
           })}
         </div>
       </div>
-      {loading && <div className="mt-4 text-[#1D9E75]">Loading schedules...</div>}
+      {loading && <div className="mt-4 text-[#10B981]">Loading schedules...</div>}
       {error && <div className="text-red-600 mt-4">{error}</div>}
+
+      {selectedDay && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm"
+          onClick={() => setSelectedDay(null)}
+        >
+          <div
+            className="w-full max-w-xl rounded-2xl border border-gray-700 bg-[#111827] shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between rounded-t-2xl border-b border-gray-700 bg-[#0B0F1A] px-5 py-4">
+              <div>
+                <div className="text-base font-bold text-[#E2E8F0]">Bookings for {formatDisplayDate(selectedDay.date)}</div>
+                <div className="mt-0.5 text-xs text-gray-400">Select a customer to view full details</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedDay(null)}
+                className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-100 dark:border-gray-600 dark:bg-[#1F2937] dark:text-gray-300 dark:hover:bg-[#263041]"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="max-h-[60vh] overflow-y-auto px-4 py-3">
+              <div className="space-y-2">
+                {selectedDay.bookings
+                  .slice()
+                  .sort((a, b) => a.start.localeCompare(b.start))
+                  .map((booking) => (
+                    <button
+                      key={booking._id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedDay(null);
+                        setSelectedBooking(booking);
+                      }}
+                      className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-left transition hover:border-emerald-500/40 hover:bg-emerald-50 dark:border-gray-700 dark:bg-[#1F2937] dark:hover:border-emerald-600/40 dark:hover:bg-[#263041]"
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-semibold text-gray-100">{booking.customerName}</div>
+                          <div className="text-xs text-gray-400">
+                            {formatTime12h(booking.start.slice(11, 16))} - {formatTime12h(booking.end.slice(11, 16))}
+                          </div>
+                        </div>
+                        <span className={`inline-flex w-fit items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${getStatusClasses(booking.status)}`}>
+                          {booking.status}
+                        </span>
+                      </div>
+                    </button>
+                  ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {selectedBooking && (
         <div
@@ -273,13 +340,13 @@ export const ScheduleCalendar: FC = () => {
           onClick={() => setSelectedBooking(null)}
         >
           <div
-            className="w-full max-w-2xl rounded-2xl border border-[#e2ede8] bg-white shadow-2xl"
+            className="w-full max-w-2xl rounded-2xl border border-gray-700 bg-[#111827] shadow-2xl"
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="flex items-center justify-between rounded-t-2xl border-b border-[#edf7f2] bg-linear-to-r from-[#f9fbfa] to-[#f4f9f7] px-5 py-4">
+            <div className="flex items-center justify-between rounded-t-2xl border-b border-gray-700 bg-[#0B0F1A] px-5 py-4">
               <div>
-                <div className="text-base font-bold text-[#0d2418]">{selectedBooking.customerName}</div>
-                <div className="mt-0.5 text-xs text-[#7aab93]">Booking Details</div>
+                <div className="text-base font-bold text-[#E2E8F0]">{selectedBooking.customerName}</div>
+                <div className="mt-0.5 text-xs text-gray-400">Booking Details</div>
               </div>
               <span className={`inline-flex w-fit items-center rounded-full px-2.5 py-1 text-xs font-semibold ${getStatusClasses(selectedBooking.status)}`}>
                 {selectedBooking.status}
@@ -287,54 +354,50 @@ export const ScheduleCalendar: FC = () => {
               <button
                 type="button"
                 onClick={() => setSelectedBooking(null)}
-                className="rounded-lg border border-[#d1e0d8] bg-white px-3 py-2 text-sm font-semibold text-[#3b6b53] hover:bg-[#f4f7f6]"
+                className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-100 dark:border-gray-600 dark:bg-[#1F2937] dark:text-gray-300 dark:hover:bg-[#263041]"
               >
                 Close
               </button>
             </div>
 
             <div className="px-5 py-4">
-              <div className="grid grid-cols-1 gap-3 text-sm text-slate-700 md:grid-cols-2">
+              <div className="grid grid-cols-1 gap-3 text-sm text-gray-200 md:grid-cols-2">
                 <div>
-                  <div className="text-[10px] font-semibold uppercase tracking-widest text-[#7aab93]">Date</div>
-                  <div className="mt-1 text-[#0d2418]">{formatDisplayDate(selectedBooking.start.slice(0, 10))}</div>
+                  <div className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">Date</div>
+                  <div className="mt-1 text-[#E2E8F0]">{formatDisplayDate(selectedBooking.start.slice(0, 10))}</div>
                 </div>
                 <div>
-                  <div className="text-[10px] font-semibold uppercase tracking-widest text-[#7aab93]">Time</div>
-                  <div className="mt-1 text-[#0d2418]">
+                  <div className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">Time</div>
+                  <div className="mt-1 text-[#E2E8F0]">
                     {formatTime12h(selectedBooking.start.slice(11, 16))} - {formatTime12h(selectedBooking.end.slice(11, 16))}
                   </div>
                 </div>
                 <div>
-                  <div className="text-[10px] font-semibold uppercase tracking-widest text-[#7aab93]">Court</div>
-                  <div className="mt-1 text-[#0d2418]">{courtNames[selectedBooking.courtId] || selectedBooking.courtId}</div>
+                  <div className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">Court</div>
+                  <div className="mt-1 text-[#E2E8F0]">{courtNames[selectedBooking.courtId] || selectedBooking.courtId}</div>
                 </div>
                 <div>
-                  <div className="text-[10px] font-semibold uppercase tracking-widest text-[#7aab93]">Booking ID</div>
-                  <div className="mt-1 text-[#0d2418]">{selectedBooking._id}</div>
+                  <div className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">Contact</div>
+                  <div className="mt-1 text-[#E2E8F0]">{selectedBooking.customerContactNumber}</div>
                 </div>
                 <div>
-                  <div className="text-[10px] font-semibold uppercase tracking-widest text-[#7aab93]">Contact</div>
-                  <div className="mt-1 text-[#0d2418]">{selectedBooking.customerContactNumber}</div>
+                  <div className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">Email</div>
+                  <div className="mt-1 break-all text-[#E2E8F0]">{selectedBooking.customerEmail}</div>
                 </div>
                 <div>
-                  <div className="text-[10px] font-semibold uppercase tracking-widest text-[#7aab93]">Email</div>
-                  <div className="mt-1 break-all text-[#0d2418]">{selectedBooking.customerEmail}</div>
+                  <div className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">Payment Ref</div>
+                  <div className="mt-1 text-[#E2E8F0]">{selectedBooking.paymentReference || "-"}</div>
                 </div>
                 <div>
-                  <div className="text-[10px] font-semibold uppercase tracking-widest text-[#7aab93]">Payment Ref</div>
-                  <div className="mt-1 text-[#0d2418]">{selectedBooking.paymentReference || "-"}</div>
-                </div>
-                <div>
-                  <div className="text-[10px] font-semibold uppercase tracking-widest text-[#7aab93]">Expires At</div>
-                  <div className="mt-1 text-[#0d2418]">
+                  <div className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">Expires At</div>
+                  <div className="mt-1 text-[#E2E8F0]">
                     {selectedBooking.expiresAt ? new Date(selectedBooking.expiresAt).toLocaleString() : "-"}
                   </div>
                 </div>
               </div>
 
               {selectedBooking.denialReason && (
-                <div className="mt-4 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-700">
+                <div className="mt-4 rounded-lg border border-red-700/40 bg-red-900/20 px-3 py-2 text-sm text-red-300">
                   <span className="font-semibold">Denial reason:</span> {selectedBooking.denialReason}
                 </div>
               )}

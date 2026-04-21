@@ -11,7 +11,7 @@ export interface Court {
 
 const statusColor = (status: Court["status"]): string => {
   switch (status) {
-    case "active": return "#1D9E75";
+    case "active": return "#10B981";
     case "inactive": return "#64748b";
     case "maintenance": return "#92600a";
     default: return "#334155";
@@ -38,11 +38,11 @@ const CourtTable: FC = () => {
 
   return (
     <div style={{ overflowX: "auto" }}>
-      {loading && <p className="text-[#1D9E75] font-medium mb-4">Loading...</p>}
+      {loading && <p className="text-[#10B981] font-medium mb-4">Loading...</p>}
       {error && <p className="text-red-600 bg-red-50 rounded-md px-4 py-2 mb-4 font-medium">{error}</p>}
-      <table className="w-full border-collapse bg-white rounded-xl shadow text-sm" style={{ minWidth: "1100px" }}>
+      <table className="w-full border-collapse bg-[#1F2937] rounded-xl shadow text-sm" style={{ minWidth: "1100px" }}>
         <thead>
-          <tr className="bg-slate-100 text-slate-700">
+          <tr className="bg-[#0B0F1A] text-gray-400">
             <th className="px-2 py-2 font-semibold text-left whitespace-nowrap">Name</th>
             <th className="px-2 py-2 font-semibold text-left whitespace-nowrap">Surface Type</th>
             <th className="px-2 py-2 font-semibold text-left whitespace-nowrap">Status</th>
@@ -56,13 +56,13 @@ const CourtTable: FC = () => {
             </tr>
           )}
           {courts.map((court) => (
-            <tr key={court._id} className="border-b border-slate-200 last:border-b-0">
-              <td className="px-2 py-2 text-slate-800 whitespace-nowrap">{court.name}</td>
-              <td className="px-2 py-2 capitalize text-slate-800 whitespace-nowrap">{court.surfaceType}</td>
+            <tr key={court._id} className="border-b border-gray-700 last:border-b-0">
+              <td className="px-2 py-2 text-gray-100 whitespace-nowrap">{court.name}</td>
+              <td className="px-2 py-2 capitalize text-gray-100 whitespace-nowrap">{court.surfaceType}</td>
               <td className="px-2 py-2 font-semibold whitespace-nowrap" style={{ color: statusColor(court.status) }}>{court.status}</td>
               <td className="px-2 py-2">
                 <button
-                  className="px-2 py-0.5 rounded bg-[#1D9E75] text-white text-sm font-semibold hover:bg-[#17876a]"
+                  className="px-2 py-0.5 rounded bg-[#10B981] text-white text-sm font-semibold hover:bg-[#059669]"
                   onClick={() => setModalCourt({ id: court._id, name: court.name })}
                 >
                   View Schedule

@@ -8,6 +8,8 @@ export const bookingStatuses = [
   "EXPIRED",
   "CANCELLED",
   "DENIED",
+  "COMPLETE",
+  "ARCHIVED",
 ] as const;
 
 const bookingSchema = new Schema(
@@ -50,10 +52,34 @@ const bookingSchema = new Schema(
       maxlength: 80,
       default: null,
     },
+    paymentMethod: {
+      type: String,
+      enum: ["cash", "online", null],
+      default: null,
+    },
+    paymentProofImage: {
+      type: String, // base64 data URL of receipt screenshot
+      default: null,
+    },
+    isArchived: {
+      type: Boolean,
+      default: false,
+    },
     denialReason: {
       type: String,
       trim: true,
       maxlength: 300,
+      default: null,
+    },
+    actionBy: {
+      type: new Schema(
+        {
+          userId:   { type: String, required: true },
+          name:     { type: String, required: true },
+          username: { type: String, required: true },
+        },
+        { _id: false }
+      ),
       default: null,
     },
     expiresAt: {
