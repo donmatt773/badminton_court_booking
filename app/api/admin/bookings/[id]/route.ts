@@ -7,6 +7,8 @@ import { findOverlappingBlockedSlot } from "@/lib/server/graphql/lib/blocked-slo
 import { getFriendlyErrorMessage } from "@/lib/server/friendly-error";
 import { triggerBookingsUpdated } from "@/lib/server/pusher-server";
 import { graphQLEnv } from "@/lib/server/graphql/config/env";
+import { CourtModel } from "@/lib/server/graphql/models/Court";
+import { computeBookingPricing } from "@/lib/server/bookings/pricing";
 
 const updateSchema = z.object({
   courtId: z.string().min(1).optional(),
@@ -120,6 +122,10 @@ export async function PUT(
       }
     }
 
+    const updatePayload: Record<string, unknown> = {
+      ...body,
+    };
+
     const isSlotMutation =
       body.courtId !== undefined ||
       body.bookingDate !== undefined ||
@@ -145,12 +151,15 @@ export async function PUT(
           { status: 409 }
         );
       }
+
+      const nextCourt = await CourtModel.findById(nextCourtId).select("price");
+      if (!nextCourt) {
+        return Response.json({ error: { message: "Court not found" } }, { status: 404 });
+      }
+
+      Object.assign(updatePayload, computeBookingPricing(nextCourt.price ?? 0, nextStartTime, nextEndTime));
+      updatePayload.pricingSnapshotSource = "recomputed_on_update";
     }
-
-    const updatePayload: Record<string, unknown> = {
-      ...body,
-    };
-
     delete updatePayload.confirmDenied;
 
     if (body.status && body.status !== "DENIED") {

@@ -23,6 +23,8 @@ export interface Booking {
   status: string;
   isArchived?: boolean;
   paymentReference?: string | null;
+  paymentMethod?: "cash" | "online" | null;
+  paymentProofImage?: string | null;
   denialReason?: string | null;
   actionBy?: { userId: string; name: string; username: string } | null;
   expiresAt: string;
@@ -36,6 +38,7 @@ interface BookingTableProps {
   restoreFnRef?: React.MutableRefObject<(() => Promise<void>) | null>;
   onSelectionChange?: (count: number) => void;
   searchCustomer?: string;
+  externalActiveTab?: StatusTab;
 }
 
 const TAB_GROUPS: Record<StatusTab, string[]> = {
@@ -57,6 +60,8 @@ const TAB_META: { key: StatusTab; label: string; dot: string }[] = [
   { key: "cancelled", label: "Cancelled", dot: "#475569" },
   { key: "archived",  label: "Archived",  dot: "#374151" },
 ];
+
+const MAIN_TAB_META = TAB_META.filter(({ key }) => key !== "archived");
 
 function statusColor(status: string): string {
   switch (status) {
@@ -140,6 +145,7 @@ interface MarkPaidModalProps {
   loading: boolean;
   requiredAmount: number;
   customerName: string;
+  staffAssignedName: string;
   courtName: string;
   bookingDate: string;
   startTime: string;
@@ -152,6 +158,7 @@ const MarkPaidModal: FC<MarkPaidModalProps> = ({
   loading,
   requiredAmount,
   customerName,
+  staffAssignedName,
   courtName,
   bookingDate,
   startTime,
@@ -159,21 +166,32 @@ const MarkPaidModal: FC<MarkPaidModalProps> = ({
 }) => {
   const [method, setMethod] = useState<"cash" | "online">("cash");
   const [amountPaidInput, setAmountPaidInput] = useState("");
+  const [onlineReferenceNo, setOnlineReferenceNo] = useState("");
+  const [onlineAmountInput, setOnlineAmountInput] = useState("");
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [imageError, setImageError] = useState("");
+  const [cameraError, setCameraError] = useState("");
+  const [cameraOpen, setCameraOpen] = useState(false);
   const [showReceiptPreview, setShowReceiptPreview] = useState(false);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
 
   const amountPaid = Number.parseFloat(amountPaidInput);
   const hasValidAmount = Number.isFinite(amountPaid) && amountPaid >= 0;
   const isCashEnough = hasValidAmount && amountPaid >= requiredAmount;
   const cashShort = hasValidAmount ? Math.max(0, requiredAmount - amountPaid) : requiredAmount;
   const cashChange = hasValidAmount ? Math.max(0, amountPaid - requiredAmount) : 0;
+  const onlineAmountPaid = Number.parseFloat(onlineAmountInput);
+  const hasValidOnlineAmount = Number.isFinite(onlineAmountPaid) && onlineAmountPaid >= 0;
+  const isOnlineEnough = hasValidOnlineAmount && onlineAmountPaid >= requiredAmount;
+  const onlineShort = hasValidOnlineAmount ? Math.max(0, requiredAmount - onlineAmountPaid) : requiredAmount;
+  const hasOnlineReference = onlineReferenceNo.trim().length > 0;
   const needsReceiptConfirm = method === "cash" && isCashEnough && cashChange > 0;
   const receiptNo = `RCPT-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${Date.now().toString().slice(-5)}`;
   const businessName = "C-One Sports Center";
   const businessAddress = "Sports Center Complex, Main Road";
   const businessTin = "TIN: 000-000-000-000";
-  const cashierName = "Receptionist";
+  const cashierName = staffAssignedName || "Receptionist";
 
   function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -195,7 +213,77 @@ const MarkPaidModal: FC<MarkPaidModalProps> = ({
   const canSubmit =
     method === "cash"
       ? isCashEnough
-      : imagePreview !== null;
+      : imagePreview !== null && hasOnlineReference && isOnlineEnough;
+
+  function stopCamera(): void {
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    setCameraOpen(false);
+  }
+
+  async function startCamera(): Promise<void> {
+    setCameraError("");
+    setImageError("");
+    try {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setCameraError("Camera is not supported on this browser.");
+        return;
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment" },
+        audio: false,
+      });
+
+      streamRef.current = stream;
+      setCameraOpen(true);
+
+      // Wait for video element to mount, then attach stream.
+      requestAnimationFrame(() => {
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          void videoRef.current.play();
+        }
+      });
+    } catch {
+      setCameraError("Unable to access camera. Please allow camera permission.");
+    }
+  }
+
+  function captureFromCamera(): void {
+    if (!videoRef.current) {
+      setCameraError("Camera preview is not ready.");
+      return;
+    }
+
+    const video = videoRef.current;
+    const width = video.videoWidth || 1280;
+    const height = video.videoHeight || 720;
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+
+    if (!ctx) {
+      setCameraError("Failed to capture image. Please try again.");
+      return;
+    }
+
+    ctx.drawImage(video, 0, 0, width, height);
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.9);
+    setImagePreview(dataUrl);
+    setCameraError("");
+    stopCamera();
+  }
+
+  useEffect(() => {
+    return () => {
+      stopCamera();
+    };
+  }, []);
 
   function commitCashPayment(): void {
     onConfirm({
@@ -215,7 +303,15 @@ const MarkPaidModal: FC<MarkPaidModalProps> = ({
         <div className="flex rounded-lg overflow-hidden border border-gray-700 mb-4">
           <button
             type="button"
-            onClick={() => { setMethod("cash"); setImagePreview(null); setImageError(""); }}
+            onClick={() => {
+              setMethod("cash");
+              setImagePreview(null);
+              setImageError("");
+              setCameraError("");
+              setOnlineReferenceNo("");
+              setOnlineAmountInput("");
+              stopCamera();
+            }}
             className={`flex-1 py-2 text-sm font-medium transition-colors ${
               method === "cash"
                 ? "bg-emerald-600 text-white"
@@ -226,7 +322,11 @@ const MarkPaidModal: FC<MarkPaidModalProps> = ({
           </button>
           <button
             type="button"
-            onClick={() => { setMethod("online"); setAmountPaidInput(""); }}
+            onClick={() => {
+              setMethod("online");
+              setAmountPaidInput("");
+              setCameraError("");
+            }}
             className={`flex-1 py-2 text-sm font-medium transition-colors ${
               method === "online"
                 ? "bg-emerald-600 text-white"
@@ -267,7 +367,87 @@ const MarkPaidModal: FC<MarkPaidModalProps> = ({
 
         {method === "online" && (
           <div className="mb-4">
+            <div className="mb-3 grid gap-2">
+              <div>
+                <label className="mb-1 block text-xs text-gray-400">Reference no.</label>
+                <input
+                  type="text"
+                  value={onlineReferenceNo}
+                  onChange={(e) => setOnlineReferenceNo(e.target.value)}
+                  placeholder="e.g. GCash/Maya reference"
+                  className="w-full rounded-lg border border-gray-700 bg-[#1F2937] px-3 py-2 text-sm text-gray-100 outline-none placeholder:text-gray-600 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20"
+                />
+                {!hasOnlineReference && (
+                  <p className="mt-1 text-xs text-red-400">Reference no. is required for online payment.</p>
+                )}
+              </div>
+              <div>
+                <label className="mb-1 block text-xs text-gray-400">Amount paid (online)</label>
+                <input
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={onlineAmountInput}
+                  onChange={(e) => setOnlineAmountInput(e.target.value)}
+                  placeholder="e.g. 500"
+                  className="w-full rounded-lg border border-gray-700 bg-[#1F2937] px-3 py-2 text-sm text-gray-100 outline-none placeholder:text-gray-600 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20"
+                />
+                <p className="mt-1 text-xs text-gray-400">
+                  Required payment: <span className="font-semibold text-emerald-400">₱{requiredAmount.toFixed(2)}</span>
+                </p>
+                {onlineAmountInput && !hasValidOnlineAmount && (
+                  <p className="mt-1 text-xs text-red-400">Enter a valid online amount.</p>
+                )}
+                {hasValidOnlineAmount && !isOnlineEnough && (
+                  <p className="mt-1 text-xs text-red-400">Insufficient payment. Needs at least ₱{onlineShort.toFixed(2)} more.</p>
+                )}
+              </div>
+            </div>
+
             <label className="block text-xs text-gray-400 mb-1">Upload payment screenshot</label>
+
+            <div className="mb-2 flex gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  void startCamera();
+                }}
+                className="rounded-lg border border-gray-700 bg-[#1F2937] px-3 py-1.5 text-xs text-gray-200 hover:border-emerald-500"
+              >
+                Use Camera
+              </button>
+              {cameraOpen && (
+                <button
+                  type="button"
+                  onClick={stopCamera}
+                  className="rounded-lg border border-gray-700 bg-[#1F2937] px-3 py-1.5 text-xs text-gray-300 hover:text-red-400"
+                >
+                  Stop Camera
+                </button>
+              )}
+            </div>
+
+            {cameraOpen && (
+              <div className="mb-2 rounded-xl border border-gray-700 bg-[#0B1220] p-2">
+                <video
+                  ref={videoRef}
+                  className="h-44 w-full rounded-lg bg-black object-contain"
+                  autoPlay
+                  playsInline
+                  muted
+                />
+                <div className="mt-2 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={captureFromCamera}
+                    className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700"
+                  >
+                    Capture Photo
+                  </button>
+                </div>
+              </div>
+            )}
+
             <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-dashed border-gray-700 rounded-xl cursor-pointer hover:border-emerald-500 transition-colors bg-[#1F2937] relative overflow-hidden">
               {imagePreview ? (
                 // eslint-disable-next-line @next/next/no-img-element
@@ -285,6 +465,7 @@ const MarkPaidModal: FC<MarkPaidModalProps> = ({
               />
             </label>
             {imageError && <p className="mt-1 text-xs text-red-400">{imageError}</p>}
+            {cameraError && <p className="mt-1 text-xs text-red-400">{cameraError}</p>}
             {imagePreview && (
               <button
                 type="button"
@@ -324,7 +505,7 @@ const MarkPaidModal: FC<MarkPaidModalProps> = ({
 
               onConfirm({
                 paymentMethod: "online",
-                paymentReference: `Online payment (${new Date().toLocaleDateString()})`,
+                paymentReference: `Online ref ${onlineReferenceNo.trim()} | Amount paid ₱${onlineAmountPaid.toFixed(2)} | Required ₱${requiredAmount.toFixed(2)} | Date ${new Date().toLocaleDateString()}`,
                 paymentProofImage: imagePreview,
               });
             }}
@@ -368,10 +549,12 @@ const MarkPaidModal: FC<MarkPaidModalProps> = ({
                   <div className="mt-3 grid grid-cols-2 gap-4">
                     <div>
                       <p className="mb-4">Customer Signature</p>
+                      <p className="mb-1 text-[10px] text-gray-400">{customerName}</p>
                       <div className="border-t border-gray-600" />
                     </div>
                     <div>
                       <p className="mb-4">Authorized Cashier</p>
+                      <p className="mb-1 text-[10px] text-gray-400">{cashierName}</p>
                       <div className="border-t border-gray-600" />
                     </div>
                   </div>
@@ -553,6 +736,113 @@ const ErrorModal: FC<{ message: string; onClose: () => void }> = ({ message, onC
 );
 
 // ---------------------------------------------------------------------------
+// Payment details modal
+// ---------------------------------------------------------------------------
+function parsePaymentReference(paymentReference?: string | null): Array<{ label: string; value: string }> | null {
+  if (!paymentReference) {
+    return null;
+  }
+
+  const cashMatch = paymentReference.match(
+    /^Cash received (.+?) \| Required (.+?) \| Change (.+?)(?: \| Receipt (.+))?$/
+  );
+  if (cashMatch) {
+    const [, cashReceived, requiredAmount, changeAmount, receiptNumber] = cashMatch;
+    return [
+      { label: "Cash Received", value: cashReceived },
+      { label: "Required Amount", value: requiredAmount },
+      { label: "Change", value: changeAmount },
+      ...(receiptNumber ? [{ label: "Receipt No.", value: receiptNumber }] : []),
+    ];
+  }
+
+  const onlineMatch = paymentReference.match(
+    /^Online ref (.+?) \| Amount paid (.+?) \| Required (.+?) \| Date (.+)$/
+  );
+  if (onlineMatch) {
+    const [, referenceNumber, amountPaid, requiredAmount, paymentDate] = onlineMatch;
+    return [
+      { label: "Reference No.", value: referenceNumber },
+      { label: "Amount Paid", value: amountPaid },
+      { label: "Required Amount", value: requiredAmount },
+      { label: "Payment Date", value: paymentDate },
+    ];
+  }
+
+  return null;
+}
+
+const PaymentDetailsModal: FC<{ booking: Booking; onClose: () => void }> = ({ booking, onClose }) => {
+  const customer =
+    typeof booking.customer === "object"
+      ? booking.customer
+      : { name: booking.customer, contactNumber: "-", email: "-" };
+
+  const hasPaymentData = Boolean(booking.paymentReference || booking.paymentProofImage);
+  const parsedPaymentReference = parsePaymentReference(booking.paymentReference);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="w-full max-w-lg rounded-2xl border border-gray-700 bg-[#111827] p-5 shadow-2xl">
+        <div className="mb-3 flex items-start justify-between gap-3">
+          <div>
+            <h3 className="text-base font-semibold text-gray-100">Payment Details</h3>
+            <p className="mt-0.5 text-xs text-gray-500">Review payment info submitted by staff.</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg border border-gray-700 bg-[#1F2937] px-2.5 py-1 text-xs text-gray-300 hover:bg-gray-700"
+          >
+            Close
+          </button>
+        </div>
+
+        <div className="grid gap-2 rounded-lg border border-gray-700 bg-[#0B0F1A] p-3 text-xs text-gray-300">
+          <div className="flex justify-between gap-3"><span className="text-gray-500">Customer</span><span className="font-medium text-gray-100">{customer.name}</span></div>
+          <div className="flex justify-between gap-3"><span className="text-gray-500">Email</span><span>{customer.email || "-"}</span></div>
+          <div className="flex justify-between gap-3"><span className="text-gray-500">Contact</span><span>{customer.contactNumber || "-"}</span></div>
+          <div className="flex justify-between gap-3"><span className="text-gray-500">Date</span><span>{booking.bookingDate}</span></div>
+          <div className="flex justify-between gap-3"><span className="text-gray-500">Time</span><span>{formatTime12h(booking.startTime)} - {formatTime12h(booking.endTime)}</span></div>
+          <div className="flex justify-between gap-3"><span className="text-gray-500">Payment Method</span><span className="uppercase">{booking.paymentMethod ?? "-"}</span></div>
+          <div className="mt-1 border-t border-gray-700 pt-2">
+            <p className="mb-1 text-gray-500">Payment Reference</p>
+            {parsedPaymentReference ? (
+              <div className="grid gap-2 rounded-lg border border-gray-700 bg-[#111827] p-3">
+                {parsedPaymentReference.map((item) => (
+                  <div key={item.label} className="flex items-start justify-between gap-3">
+                    <span className="text-gray-500">{item.label}</span>
+                    <span className="text-right font-medium text-gray-100">{item.value}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="whitespace-pre-wrap wrap-break-word text-gray-200">{booking.paymentReference || "No reference recorded."}</p>
+            )}
+          </div>
+        </div>
+
+        <div className="mt-3">
+          <p className="mb-1 text-xs text-gray-500">Payment Proof</p>
+          {booking.paymentProofImage ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={booking.paymentProofImage}
+              alt="Payment proof"
+              className="max-h-72 w-full rounded-lg border border-gray-700 bg-[#0B0F1A] object-contain"
+            />
+          ) : (
+            <div className="rounded-lg border border-gray-700 bg-[#0B0F1A] px-3 py-5 text-center text-xs text-gray-500">
+              {hasPaymentData ? "No image proof attached." : "No payment details recorded yet."}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ---------------------------------------------------------------------------
 // Action buttons per booking
 // ---------------------------------------------------------------------------
 interface BookingActionsProps {
@@ -683,6 +973,7 @@ const BookingActions: FC<BookingActionsProps> = ({
           loading={loading}
           requiredAmount={requiredAmount}
           customerName={customerName}
+          staffAssignedName={booking.actionBy?.name ?? "Receptionist"}
           courtName={courtName}
           bookingDate={booking.bookingDate}
           startTime={booking.startTime}
@@ -710,7 +1001,7 @@ interface StatusTabsProps {
 
 const StatusTabs: FC<StatusTabsProps> = ({ activeTab, counts, onChange }) => (
   <div className="flex gap-1 flex-wrap mb-4">
-    {TAB_META.map(({ key, label, dot }) => {
+    {MAIN_TAB_META.map(({ key, label, dot }) => {
       const count = counts[key];
       const isActive = activeTab === key;
       return (
@@ -745,7 +1036,7 @@ const StatusTabs: FC<StatusTabsProps> = ({ activeTab, counts, onChange }) => (
 // ---------------------------------------------------------------------------
 // Main table
 // ---------------------------------------------------------------------------
-export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef, restoreFnRef, onSelectionChange, searchCustomer = "" }) => {
+export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef, restoreFnRef, onSelectionChange, searchCustomer = "", externalActiveTab }) => {
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [loading, setLoading]   = useState(true);
   const [error, setError]       = useState<string | null>(null);
@@ -755,6 +1046,7 @@ export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef,
   const [archiving, setArchiving] = useState(false);
   const [sortKey, setSortKey] = useState<"customer" | "contact" | "court" | "date" | "time" | "status">("date");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
+  const [selectedPaymentBooking, setSelectedPaymentBooking] = useState<Booking | null>(null);
   const courtCatalog             = useCourtCatalog();
   const courtNames               = Object.fromEntries(Object.entries(courtCatalog).map(([id, value]) => [id, value.name]));
   const initializedPendingIdsRef = useRef(false);
@@ -781,6 +1073,16 @@ export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef,
     onTabChange?.(tab);
     onSelectionChange?.(0);
   }
+
+  useEffect(() => {
+    if (!externalActiveTab || externalActiveTab === activeTab) {
+      return;
+    }
+
+    setActiveTab(externalActiveTab);
+    setSelectedIds(new Set());
+    onSelectionChange?.(0);
+  }, [activeTab, externalActiveTab, onSelectionChange]);
 
   async function archiveSelected(): Promise<void> {
     if (selectedIds.size === 0) return;
@@ -994,8 +1296,11 @@ export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef,
   const colSpan = (showCheckboxCol ? 1 : 0) + 7 + (showDenialCol ? 1 : 0) + (showActionByCol ? 1 : 0) + (showActionsCol ? 1 : 0);
 
   const archivableStatuses = ["COMPLETE", "CANCELLED", "EXPIRED", "DENIED"];
-  const archivableVisible = visibleBookings.filter((b) => archivableStatuses.includes(b.status) && !b.isArchived);
-  const allArchivableSelected = archivableVisible.length > 0 && archivableVisible.every((b) => selectedIds.has(b._id));
+  const selectableVisible =
+    activeTab === "archived"
+      ? visibleBookings.filter((b) => b.isArchived === true || b.status === "ARCHIVED")
+      : visibleBookings.filter((b) => archivableStatuses.includes(b.status) && !b.isArchived);
+  const allSelectableSelected = selectableVisible.length > 0 && selectableVisible.every((b) => selectedIds.has(b._id));
 
   return (
     <div className="w-full max-w-7xl mx-auto">
@@ -1045,18 +1350,18 @@ export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef,
                   <input
                     type="checkbox"
                     className="rounded border-gray-600 bg-gray-800 text-indigo-500 cursor-pointer"
-                    checked={allArchivableSelected}
+                    checked={allSelectableSelected}
                     onChange={(e) => {
                       if (e.target.checked) {
                         setSelectedIds((prev) => {
                           const next = new Set(prev);
-                          archivableVisible.forEach((b) => next.add(b._id));
+                          selectableVisible.forEach((b) => next.add(b._id));
                           return next;
                         });
                       } else {
                         setSelectedIds((prev) => {
                           const next = new Set(prev);
-                          archivableVisible.forEach((b) => next.delete(b._id));
+                          selectableVisible.forEach((b) => next.delete(b._id));
                           return next;
                         });
                       }
@@ -1123,7 +1428,10 @@ export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef,
 
               const isPending = b.status === "PENDING";
 
-              const isArchivable = archivableStatuses.includes(b.status) && !b.isArchived;
+              const isSelectable =
+                activeTab === "archived"
+                  ? b.isArchived === true || b.status === "ARCHIVED"
+                  : archivableStatuses.includes(b.status) && !b.isArchived;
               const isSelected = selectedIds.has(b._id);
 
               return (
@@ -1139,7 +1447,7 @@ export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef,
                 >
                   {showCheckboxCol && (
                     <td className="px-3 py-3">
-                      {isArchivable && (
+                      {isSelectable && (
                         <input
                           type="checkbox"
                           className="rounded border-gray-600 bg-gray-800 text-indigo-500 cursor-pointer"
@@ -1157,8 +1465,14 @@ export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef,
                     </td>
                   )}
                   <td className="px-4 py-3">
-                    <div className="font-medium text-gray-100">{customer.name}</div>
-                    <div className="text-xs text-gray-500">{customer.email || "-"}</div>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedPaymentBooking(b)}
+                      className="text-left"
+                    >
+                      <div className="font-medium text-gray-100 underline decoration-dotted underline-offset-2 hover:text-emerald-300">{customer.name}</div>
+                      <div className="text-xs text-gray-500">{customer.email || "-"}</div>
+                    </button>
                   </td>
                   <td className="px-4 py-3 text-gray-300">
                     {customer.contactNumber || "-"}
@@ -1243,6 +1557,13 @@ export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef,
           </tbody>
         </table>
       </div>
+
+      {selectedPaymentBooking && (
+        <PaymentDetailsModal
+          booking={selectedPaymentBooking}
+          onClose={() => setSelectedPaymentBooking(null)}
+        />
+      )}
     </div>
   );
 };

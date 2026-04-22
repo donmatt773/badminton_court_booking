@@ -13,6 +13,7 @@ import { findOverlappingBlockedSlot } from "@/lib/server/graphql/lib/blocked-slo
 import { triggerBookingsUpdated } from "@/lib/server/pusher-server";
 import { EVENTS } from "@/lib/server/graphql/lib/events";
 import { pubSub } from "@/lib/server/graphql/lib/pubsub";
+import { computeBookingPricing } from "@/lib/server/bookings/pricing";
 import {
   assertValidTimeRange,
   createBookingSchema,
@@ -82,7 +83,10 @@ export const resolvers = {
       return BlockedSlotModel.find(query).sort({ bookingDate: 1, startTime: 1, createdAt: -1 });
     },
     courts: async () => {
-      return CourtModel.find({ status: "active" }).sort({ name: 1 });
+      const courts = await CourtModel.find({ status: "active" });
+      return courts.sort((a, b) =>
+        String(a.name).localeCompare(String(b.name), undefined, { numeric: true, sensitivity: "base" })
+      );
     },
     abuseLogs: async (
       _parent: unknown,
@@ -219,6 +223,7 @@ export const resolvers = {
         }
 
         const expiresAt = new Date(now.getTime() + graphQLEnv.PENDING_EXPIRY_MINUTES * 60_000);
+        const pricing = computeBookingPricing(court.price ?? 0, parsed.startTime, parsed.endTime);
 
         const booking = await BookingModel.create({
           customer: customer._id,
@@ -226,6 +231,10 @@ export const resolvers = {
           bookingDate: parsed.bookingDate,
           startTime: parsed.startTime,
           endTime: parsed.endTime,
+          appliedHourlyRate: pricing.appliedHourlyRate,
+          durationHours: pricing.durationHours,
+          chargedAmount: pricing.chargedAmount,
+          pricingSnapshotSource: "captured_at_booking",
           status: "PENDING",
           expiresAt,
           ...(parsed.paymentMethod ? { paymentMethod: parsed.paymentMethod } : {}),

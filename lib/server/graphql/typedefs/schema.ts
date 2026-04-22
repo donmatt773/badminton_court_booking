@@ -52,6 +52,10 @@ export const typeDefs = `#graphql
     bookingDate: String!
     startTime: String!
     endTime: String!
+    appliedHourlyRate: Float
+    durationHours: Float
+    chargedAmount: Float
+    pricingSnapshotSource: String
     status: BookingStatus!
     isArchived: Boolean
     paymentReference: String

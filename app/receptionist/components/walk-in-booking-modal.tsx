@@ -61,11 +61,70 @@ export const WalkInBookingModal: FC<WalkInBookingModalProps> = ({ onClose, onCre
   const [endTime, setEndTime] = useState("");
   const [status, setStatus] = useState("APPROVED");
 
+  // Slot availability
+  interface BookingSlot { startTime: string; endTime: string; status: string; }
+  interface BlockedSlotItem { startTime: string; endTime: string; }
+  const [takenBookings, setTakenBookings] = useState<BookingSlot[]>([]);
+  const [takenBlocked, setTakenBlocked] = useState<BlockedSlotItem[]>([]);
+
+  const SLOT_START = 10;
+  const SLOT_END = 24;
+  const allSlots: string[] = [];
+  for (let h = SLOT_START; h < SLOT_END; h++) {
+    allSlots.push(`${String(h).padStart(2, "0")}:00`);
+  }
+
+  function fmtHour(hhmm: string): string {
+    const [h] = hhmm.split(":").map(Number);
+    if (isNaN(h)) return hhmm;
+    if (h === 24 || h === 0) return "12:00 AM";
+    const hour = h % 12 === 0 ? 12 : h % 12;
+    return `${hour}:00 ${h < 12 ? "AM" : "PM"}`;
+  }
+
+  function rangesOverlapLocal(sA: string, eA: string, sB: string, eB: string): boolean {
+    return sA < eB && eA > sB;
+  }
+
+  function isSlotTaken(sStart: string, sEnd: string): boolean {
+    const activeStatuses = ["PENDING", "CONFIRMED", "PAID", "APPROVED"];
+    return (
+      takenBookings.some(
+        (b) => activeStatuses.includes(b.status) && rangesOverlapLocal(sStart, sEnd, b.startTime, b.endTime)
+      ) || takenBlocked.some((b) => rangesOverlapLocal(sStart, sEnd, b.startTime, b.endTime))
+    );
+  }
+
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const today = localISODate();
   const nowTime = currentTimeHHMM();
+
+  useEffect(() => {
+    if (!courtId || !bookingDate) {
+      setTakenBookings([]);
+      setTakenBlocked([]);
+      return;
+    }
+    async function loadSlots() {
+      try {
+        const [bRes, blRes] = await Promise.all([
+          fetch("/api/admin/bookings", { credentials: "include" }),
+          fetch(`/api/admin/blocked-slots?courtId=${encodeURIComponent(courtId)}&bookingDate=${encodeURIComponent(bookingDate)}`, { credentials: "include" }),
+        ]);
+        const bData = (await bRes.json()) as { data: (BookingSlot & { courtId: string; bookingDate: string })[] };
+        const blData = (await blRes.json()) as { data: (BlockedSlotItem & { courtId: string; bookingDate: string })[] };
+        setTakenBookings(
+          (bData.data ?? []).filter((b) => b.courtId === courtId && (b as { bookingDate: string }).bookingDate === bookingDate)
+        );
+        setTakenBlocked(blData.data ?? []);
+      } catch {
+        // silently ignore; server will validate
+      }
+    }
+    void loadSlots();
+  }, [courtId, bookingDate]);
 
   useEffect(() => {
     async function load() {
@@ -288,26 +347,110 @@ export const WalkInBookingModal: FC<WalkInBookingModalProps> = ({ onClose, onCre
                 />
               </div>
 
-              <div>
-                <label className={labelCls}>Start Time</label>
-                <input
-                  className={inputCls}
-                  type="time"
-                  value={startTime}
-                  min={bookingDate === today ? nowTime : undefined}
-                  onChange={(e) => setStartTime(e.target.value)}
-                />
-              </div>
-
-              <div>
-                <label className={labelCls}>End Time</label>
-                <input
-                  className={inputCls}
-                  type="time"
-                  value={endTime}
-                  min={bookingDate === today ? (startTime > nowTime ? startTime : nowTime) : startTime || undefined}
-                  onChange={(e) => setEndTime(e.target.value)}
-                />
+              <div className="col-span-2">
+                <label className={labelCls}>Time Slot (1 hour)</label>
+                {!courtId || !bookingDate ? (
+                  <p className="text-xs text-gray-500">Select a court and date first.</p>
+                ) : (
+                  <>
+                    {/* Linear timeline – two rows, IN/OUT range selection */}
+                    {([allSlots.slice(0, 7), allSlots.slice(7)] as string[][]).map((rowSlots, rowIdx) => {
+                      const rowEndHour = rowIdx === 0 ? SLOT_START + 7 : SLOT_END;
+                      return (
+                        <div key={rowIdx} className={rowIdx === 0 ? "flex mb-3" : "flex"}>
+                          {rowSlots.map((slotStart, idx) => {
+                            const slotEnd = `${String(parseInt(slotStart.split(":")[0]) + 1).padStart(2, "0")}:00`;
+                            const isPast = bookingDate === today && slotEnd <= nowTime;
+                            const isTaken = isSlotTaken(slotStart, slotEnd);
+                            const isInRange = !!(startTime && endTime && slotStart >= startTime && slotEnd <= endTime);
+                            const isStartSlot = startTime === slotStart;
+                            const isEndSlot = endTime === slotEnd;
+                            const isDisabled = isPast || isTaken;
+                            const isFirst = idx === 0;
+                            const isLast = idx === rowSlots.length - 1;
+                            return (
+                              <button
+                                key={slotStart}
+                                type="button"
+                                disabled={isDisabled}
+                                onClick={() => {
+                                  if (!startTime || slotStart < startTime) {
+                                    setStartTime(slotStart); setEndTime(slotEnd);
+                                  } else if (slotStart === startTime) {
+                                    setStartTime(""); setEndTime("");
+                                  } else if (isSlotTaken(startTime, slotEnd)) {
+                                    setStartTime(slotStart); setEndTime(slotEnd);
+                                  } else {
+                                    setEndTime(slotEnd);
+                                  }
+                                }}
+                                style={{
+                                  position: "relative",
+                                  flex: 1,
+                                  padding: "6px 0 20px",
+                                  background: "none",
+                                  border: "none",
+                                  cursor: isDisabled ? "not-allowed" : "pointer",
+                                  opacity: isPast ? 0.4 : 1,
+                                }}
+                              >
+                                <div style={{ fontSize: 9, textAlign: "center", marginBottom: 5, whiteSpace: "nowrap", color: isInRange ? "#6EE7B7" : isTaken ? "#F87171" : "#9CA3AF", fontWeight: isStartSlot || isEndSlot ? 700 : 400 }}>
+                                  {fmtHour(slotStart)}
+                                </div>
+                                {/* track */}
+                                <div style={{ height: 6, background: isInRange ? "#10B981" : isTaken ? "rgba(239,68,68,0.45)" : "#374151", borderRadius: isFirst ? "999px 0 0 999px" : isLast ? "0 999px 999px 0" : 0, transition: "background 0.15s" }} />
+                                {/* left tick */}
+                                <div style={{ position: "absolute", bottom: 10, left: 0, width: 1, height: 8, background: isInRange ? "#10B981" : "#374151" }} />
+                                {/* status */}
+                                {(isTaken || (isPast && !isTaken)) && (
+                                  <div style={{ position: "absolute", bottom: 0, left: "50%", transform: "translateX(-50%)", fontSize: 8, whiteSpace: "nowrap", color: isTaken ? "#F87171" : "#6B7280" }}>
+                                    {isTaken ? "Taken" : "Past"}
+                                  </div>
+                                )}
+                                {/* IN indicator */}
+                                {isStartSlot && (
+                                  <div style={{ position: "absolute", bottom: 0, left: 0, transform: "translateX(-50%)", display: "flex", flexDirection: "column", alignItems: "center", gap: 1, zIndex: 2 }}>
+                                    <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#10B981", boxShadow: "0 0 7px rgba(16,185,129,0.8)" }} />
+                                    <span style={{ fontSize: 8, color: "#6EE7B7", fontWeight: 800, lineHeight: 1 }}>IN</span>
+                                  </div>
+                                )}
+                                {/* OUT indicator */}
+                                {isEndSlot && (
+                                  <div style={{ position: "absolute", bottom: 0, right: 0, transform: "translateX(50%)", display: "flex", flexDirection: "column", alignItems: "center", gap: 1, zIndex: 2 }}>
+                                    <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#F59E0B", boxShadow: "0 0 7px rgba(245,158,11,0.8)" }} />
+                                    <span style={{ fontSize: 8, color: "#FCD34D", fontWeight: 800, lineHeight: 1 }}>OUT</span>
+                                  </div>
+                                )}
+                              </button>
+                            );
+                          })}
+                          {/* row end label */}
+                          <div style={{ flexShrink: 0 }}>
+                            <div style={{ fontSize: 9, marginBottom: 5, color: "#9CA3AF", whiteSpace: "nowrap" }}>
+                              {fmtHour(`${String(rowEndHour).padStart(2, "0")}:00`)}
+                            </div>
+                            <div style={{ width: 1, height: 6, background: "#374151" }} />
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {startTime && (
+                      <p className="text-xs mt-1.5" style={{ color: "#9CA3AF" }}>
+                        <span style={{ color: "#6EE7B7", fontWeight: 700 }}>IN</span> {fmtHour(startTime)}
+                        {" – "}
+                        <span style={{ color: "#FCD34D", fontWeight: 700 }}>OUT</span> {fmtHour(endTime)}
+                        {" · "}
+                        <span style={{ color: "#A7F3D0", fontWeight: 700 }}>
+                          Duration {Math.max(
+                            0,
+                            (Number(endTime.split(":")[0]) * 60 + Number(endTime.split(":")[1])) -
+                              (Number(startTime.split(":")[0]) * 60 + Number(startTime.split(":")[1]))
+                          ) / 60}h
+                        </span>
+                      </p>
+                    )}
+                  </>
+                )}
               </div>
 
               <div className="col-span-2">

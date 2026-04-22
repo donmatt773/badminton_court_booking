@@ -393,6 +393,40 @@ function ChangePasswordSection({ userId }: { userId: string }) {
   );
 }
 
+function parsePaymentReference(paymentReference?: string | null): Array<{ label: string; value: string }> | null {
+  if (!paymentReference) {
+    return null;
+  }
+
+  const cashMatch = paymentReference.match(
+    /^Cash received (.+?) \| Required (.+?) \| Change (.+?)(?: \| Receipt (.+))?$/
+  );
+  if (cashMatch) {
+    const [, cashReceived, requiredAmount, changeAmount, receiptNumber] = cashMatch;
+    return [
+      { label: "Cash Received", value: cashReceived },
+      { label: "Required Amount", value: requiredAmount },
+      { label: "Change", value: changeAmount },
+      ...(receiptNumber ? [{ label: "Receipt No.", value: receiptNumber }] : []),
+    ];
+  }
+
+  const onlineMatch = paymentReference.match(
+    /^Online ref (.+?) \| Amount paid (.+?) \| Required (.+?) \| Date (.+)$/
+  );
+  if (onlineMatch) {
+    const [, referenceNumber, amountPaid, requiredAmount, paymentDate] = onlineMatch;
+    return [
+      { label: "Reference No.", value: referenceNumber },
+      { label: "Amount Paid", value: amountPaid },
+      { label: "Required Amount", value: requiredAmount },
+      { label: "Payment Date", value: paymentDate },
+    ];
+  }
+
+  return null;
+}
+
 export default function AdminPage() {
   const [activeTab, setActiveTab] = useState<
     "bookings" | "customers" | "courts" | "users" | "abuse"
@@ -473,7 +507,11 @@ export default function AdminPage() {
 
       setBookings(bookingsData);
       setCustomers(customersData);
-      setCourts(courtsData);
+      setCourts(
+        [...courtsData].sort((a, b) =>
+          a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" })
+        )
+      );
       setUsers(usersData);
       setAbuseLogs(abuseData);
     } catch (err) {
@@ -1889,9 +1927,23 @@ export default function AdminPage() {
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-[#6b9e84] mb-0.5">Status</p>
                 <span className={statusClassName(selectedBooking.status)}>{selectedBooking.status}</span>
               </div>
-              <div>
+              <div className="col-span-2">
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-[#6b9e84] mb-0.5">Payment Reference</p>
-                <p className="text-gray-200">{selectedBooking.paymentReference ?? "—"}</p>
+                {(() => {
+                  const parsed = parsePaymentReference(selectedBooking.paymentReference);
+                  return parsed ? (
+                    <div className="grid gap-2 rounded-lg border border-gray-700 bg-[#0B0F1A] p-3 text-sm">
+                      {parsed.map((item) => (
+                        <div key={item.label} className="flex justify-between gap-3">
+                          <span className="text-gray-500">{item.label}</span>
+                          <span className="text-right font-medium text-gray-200">{item.value}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-gray-200">{selectedBooking.paymentReference ?? "—"}</p>
+                  );
+                })()}
               </div>
               {selectedBooking.denialReason && (
                 <div className="col-span-2">

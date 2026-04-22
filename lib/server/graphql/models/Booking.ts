@@ -40,6 +40,26 @@ const bookingSchema = new Schema(
       required: true,
       trim: true,
     },
+    appliedHourlyRate: {
+      type: Number,
+      min: 0,
+      default: null,
+    },
+    durationHours: {
+      type: Number,
+      min: 0,
+      default: null,
+    },
+    chargedAmount: {
+      type: Number,
+      min: 0,
+      default: null,
+    },
+    pricingSnapshotSource: {
+      type: String,
+      enum: ["captured_at_booking", "recomputed_on_update", "backfilled_current_court_rate"],
+      default: null,
+    },
     status: {
       type: String,
       enum: bookingStatuses,

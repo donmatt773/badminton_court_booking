@@ -4,7 +4,7 @@ import { gql } from "@apollo/client";
 import { useMutation, useQuery } from "@apollo/client/react";
 import Image from "next/image";
 import Link from "next/link";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { getPusherClient } from "@/lib/client/pusher-client";
 import { REALTIME_CHANNELS, REALTIME_EVENTS } from "@/lib/shared/realtime-events";
 
@@ -59,8 +59,8 @@ type BookingInput = {
 // ---------------------------------------------------------------------------
 // Time configuration
 // ---------------------------------------------------------------------------
-const SLOT_START_HOUR = 8;   // 8:00 AM
-const SLOT_END_HOUR   = 22;  // 10:00 PM
+const SLOT_START_HOUR = 10;  // 10:00 AM
+const SLOT_END_HOUR   = 24;  // 12:00 AM (midnight)
 
 /** All selectable hours as "HH:00" strings */
 function generateHours(): string[] {
@@ -78,6 +78,7 @@ const ALL_SLOTS = ALL_HOURS.slice(0, -1); // start hours only (8-21)
 function formatHour(hhmm: string): string {
   const [h, m] = hhmm.split(":").map(Number);
   if (isNaN(h) || isNaN(m)) return hhmm;
+  if (h === 24 || h === 0) return `12:${String(m).padStart(2, "0")} AM`;
   const hour = h % 12 === 0 ? 12 : h % 12;
   return `${hour}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`;
 }
@@ -378,15 +379,16 @@ export default function BookingExperience() {
   const courts = data?.courts ?? [];
   const bookings = data?.bookings ?? [];
   const blockedSlots = data?.blockedSlots ?? [];
+  const isInitialLoading = isLoading && !data;
   const errorMessage = submissionErrorMessage || (queryError?.message ?? "");
 
-  // Active bookings for the selected court (for overlap validation)
+  // Occupied bookings for the selected court (PENDING is also treated as unavailable).
   const activeBookingsForCourt = useMemo(
     () =>
       bookings.filter(
         (b) =>
           b.courtId === form.courtId &&
-          !['EXPIRED', 'CANCELLED', 'DENIED', 'ARCHIVED'].includes(b.status) &&
+          ["PENDING", "CONFIRMED", "PAID", "APPROVED"].includes(b.status) &&
           !b.isArchived
       ),
     [bookings, form.courtId]
@@ -412,6 +414,9 @@ export default function BookingExperience() {
     [courts, form.courtId]
   );
 
+  const refetchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isRefetchingFromRealtimeRef = useRef(false);
+
   useEffect(() => {
     setForm((prev) => {
       const hasCurrentCourt = courts.some((court) => court.id === prev.courtId);
@@ -433,7 +438,22 @@ export default function BookingExperience() {
     const blockedSlotChannel = pusher.subscribe(REALTIME_CHANNELS.blockedSlots);
     const courtsChannel = pusher.subscribe(REALTIME_CHANNELS.courts);
     const handleUpdate = () => {
-      void refetch();
+      if (refetchDebounceRef.current) {
+        clearTimeout(refetchDebounceRef.current);
+      }
+
+      // Collapse event bursts (bookings/blocked/courts) to one network request.
+      refetchDebounceRef.current = setTimeout(() => {
+        refetchDebounceRef.current = null;
+        if (isRefetchingFromRealtimeRef.current) {
+          return;
+        }
+
+        isRefetchingFromRealtimeRef.current = true;
+        void refetch().finally(() => {
+          isRefetchingFromRealtimeRef.current = false;
+        });
+      }, 120);
     };
 
     bookingChannel.bind(REALTIME_EVENTS.updated, handleUpdate);
@@ -441,6 +461,10 @@ export default function BookingExperience() {
     courtsChannel.bind(REALTIME_EVENTS.updated, handleUpdate);
 
     return () => {
+      if (refetchDebounceRef.current) {
+        clearTimeout(refetchDebounceRef.current);
+        refetchDebounceRef.current = null;
+      }
       bookingChannel.unbind(REALTIME_EVENTS.updated, handleUpdate);
       blockedSlotChannel.unbind(REALTIME_EVENTS.updated, handleUpdate);
       courtsChannel.unbind(REALTIME_EVENTS.updated, handleUpdate);
@@ -473,7 +497,7 @@ export default function BookingExperience() {
 
   function validateStepOne(): string | null {
     if (!form.startTime || !form.endTime) {
-      return "Please select both a time in and time out.";
+      return "Please select a time slot.";
     }
     if (form.startTime >= form.endTime) {
       return "Time out must be after time in.";
@@ -609,7 +633,7 @@ export default function BookingExperience() {
             Reserve a court
           </a>
           <Link
-            href="/login"
+            href="/Login"
             style={{
               padding: "8px 16px",
               borderRadius: "var(--border-radius-md)",
@@ -775,7 +799,7 @@ export default function BookingExperience() {
                 boxShadow: "0 1px 4px rgba(13,100,68,0.06)",
               }}
             />
-            {isLoading && (
+            {isInitialLoading && (
               <span style={{ color: "var(--color-text-secondary)", fontSize: 12 }}>
                 Refreshing…
               </span>
@@ -813,7 +837,7 @@ export default function BookingExperience() {
           </span>
         </div>
 
-        {courts.length === 0 && !isLoading && (
+        {courts.length === 0 && !isInitialLoading && (
           <p
             style={{
               padding: "20px 18px",
@@ -1187,138 +1211,112 @@ export default function BookingExperience() {
 
                 <div>
                   <p style={{ margin: "0 0 10px", fontSize: 13, fontWeight: 500, color: "var(--color-text-primary)" }}>
-                    Select time
+                    Select a time slot
                   </p>
-                  <div style={{ display: "flex", gap: 8, marginTop: 6, alignItems: "stretch", flexWrap: "wrap" }}>
-                    <div style={{ flex: "1 1 230px", display: "grid", gap: 6 }}>
-                      <label style={labelStyle}>
-                        Time in
-                        <input
-                          type="time"
-                          step={60}
-                          min={
-                            form.bookingDate === todayISODate()
-                              ? (currentTimeHHMM() < `${String(SLOT_START_HOUR).padStart(2, "0")}:00`
-                                  ? `${String(SLOT_START_HOUR).padStart(2, "0")}:00`
-                                  : currentTimeHHMM())
-                              : `${String(SLOT_START_HOUR).padStart(2, "0")}:00`
-                          }
-                          max={`${String(SLOT_END_HOUR - 1).padStart(2, "0")}:59`}
-                          value={form.startTime}
-                          onChange={(e) => setForm((prev) => ({ ...prev, startTime: e.target.value }))}
-                          style={inputStyle}
-                        />
-                      </label>
-                      <label style={labelStyle}>
-                        Time out
-                        <input
-                          type="time"
-                          step={60}
-                          min={
-                            form.startTime
-                              ? addMinutes(form.startTime, 1)
-                              : form.bookingDate === todayISODate()
-                              ? (currentTimeHHMM() < `${String(SLOT_START_HOUR).padStart(2, "0")}:00`
-                                  ? `${String(SLOT_START_HOUR).padStart(2, "0")}:00`
-                                  : currentTimeHHMM())
-                              : `${String(SLOT_START_HOUR).padStart(2, "0")}:00`
-                          }
-                          max={`${String(SLOT_END_HOUR).padStart(2, "0")}:00`}
-                          value={form.endTime}
-                          onChange={(e) => setForm((prev) => ({ ...prev, endTime: e.target.value }))}
-                          style={inputStyle}
-                        />
-                      </label>
-                    </div>
-
-                    {(() => {
-                      const preview = form.startTime || currentTimeHHMM();
-                      const [h, m] = preview.split(":").map(Number);
-                      const hourDeg = (isNaN(h) ? 0 : ((h % 12) + (isNaN(m) ? 0 : m / 60)) * 30);
-                      const minuteDeg = (isNaN(m) ? 0 : m * 6);
-                      const durationMinutes = form.startTime && form.endTime ? Math.max(0, toMinutes(form.endTime) - toMinutes(form.startTime)) : 0;
-
-                      return (
-                        <div
-                          style={{
-                            flex: "0 0 138px",
-                            border: "1px solid var(--color-border-secondary)",
-                            borderRadius: "var(--border-radius-md)",
-                            padding: 8,
-                            background: "var(--color-background-secondary)",
-                            display: "grid",
-                            gap: 6,
-                            alignContent: "start",
-                          }}
-                        >
-                          <p style={{ margin: 0, fontSize: 11, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--color-text-secondary)" }}>
-                            Clock preview
-                          </p>
-                          <div
-                            style={{
-                              width: 70,
-                              height: 70,
-                              margin: "0 auto",
-                              borderRadius: "50%",
-                              border: "2px solid rgba(16,185,129,0.45)",
-                              background: "radial-gradient(circle at 30% 30%, rgba(16,185,129,0.22), rgba(11,15,26,0.9) 70%)",
-                              position: "relative",
-                            }}
-                          >
-                            <span style={{ position: "absolute", top: 4, left: "50%", transform: "translateX(-50%)", fontSize: 9, color: "#6EE7B7" }}>12</span>
-                            <span style={{ position: "absolute", bottom: 4, left: "50%", transform: "translateX(-50%)", fontSize: 9, color: "#6EE7B7" }}>6</span>
-                            <span style={{ position: "absolute", left: 6, top: "50%", transform: "translateY(-50%)", fontSize: 9, color: "#6EE7B7" }}>9</span>
-                            <span style={{ position: "absolute", right: 6, top: "50%", transform: "translateY(-50%)", fontSize: 9, color: "#6EE7B7" }}>3</span>
-
-                            <span
-                              style={{
-                                position: "absolute",
-                                left: "50%",
-                                top: "50%",
-                                width: 2,
-                                height: 18,
-                                background: "#A7F3D0",
-                                transformOrigin: "bottom center",
-                                transform: `translate(-50%, -100%) rotate(${hourDeg}deg)`,
-                                borderRadius: 999,
+                  {/* Linear timeline – two rows, IN/OUT range selection */}
+                  {([ALL_SLOTS.slice(0, 7), ALL_SLOTS.slice(7)] as string[][]).map((rowSlots, rowIdx) => {
+                    const rowEndHour = rowIdx === 0 ? SLOT_START_HOUR + 7 : SLOT_END_HOUR;
+                    return (
+                      <div key={rowIdx} style={{ display: "flex", marginBottom: rowIdx === 0 ? 14 : 0 }}>
+                        {rowSlots.map((slotStart, idx) => {
+                          const slotEnd = addHour(slotStart);
+                          const isPast = form.bookingDate === todayISODate() && slotEnd <= currentTimeHHMM();
+                          const isTaken = hasConflict(slotStart, slotEnd);
+                          const isInRange = !!(form.startTime && form.endTime && slotStart >= form.startTime && slotEnd <= form.endTime);
+                          const isStartSlot = form.startTime === slotStart;
+                          const isEndSlot = form.endTime === slotEnd;
+                          const isDisabled = isPast || isTaken;
+                          const isFirst = idx === 0;
+                          const isLast = idx === rowSlots.length - 1;
+                          return (
+                            <button
+                              key={slotStart}
+                              type="button"
+                              disabled={isDisabled}
+                              onClick={() => {
+                                if (!form.startTime || slotStart < form.startTime) {
+                                  setForm((prev) => ({ ...prev, startTime: slotStart, endTime: slotEnd }));
+                                } else if (slotStart === form.startTime) {
+                                  setForm((prev) => ({ ...prev, startTime: "", endTime: "" }));
+                                } else if (hasConflict(form.startTime, slotEnd)) {
+                                  setForm((prev) => ({ ...prev, startTime: slotStart, endTime: slotEnd }));
+                                } else {
+                                  setForm((prev) => ({ ...prev, endTime: slotEnd }));
+                                }
                               }}
-                            />
-                            <span
                               style={{
-                                position: "absolute",
-                                left: "50%",
-                                top: "50%",
-                                width: 1.5,
-                                height: 24,
-                                background: "#10B981",
-                                transformOrigin: "bottom center",
-                                transform: `translate(-50%, -100%) rotate(${minuteDeg}deg)`,
-                                borderRadius: 999,
+                                position: "relative",
+                                flex: 1,
+                                padding: "6px 0 20px",
+                                background: "none",
+                                border: "none",
+                                cursor: isDisabled ? "not-allowed" : "pointer",
+                                opacity: isPast ? 0.4 : 1,
                               }}
-                            />
-                            <span
-                              style={{
-                                position: "absolute",
-                                left: "50%",
-                                top: "50%",
-                                width: 7,
-                                height: 7,
-                                borderRadius: "50%",
-                                background: "#10B981",
-                                transform: "translate(-50%, -50%)",
-                              }}
-                            />
+                            >
+                              <div style={{
+                                fontSize: 10,
+                                textAlign: "center",
+                                marginBottom: 5,
+                                color: isInRange ? "#6EE7B7" : isTaken ? "#F87171" : "var(--color-text-secondary)",
+                                fontWeight: isStartSlot || isEndSlot ? 700 : 400,
+                                whiteSpace: "nowrap",
+                              }}>
+                                {formatHour(slotStart)}
+                              </div>
+                              {/* track */}
+                              <div style={{
+                                height: 6,
+                                background: isInRange ? "#10B981" : isTaken ? "rgba(239,68,68,0.45)" : "var(--color-border-secondary)",
+                                borderRadius: isFirst ? "999px 0 0 999px" : isLast ? "0 999px 999px 0" : 0,
+                                transition: "background 0.15s",
+                              }} />
+                              {/* left tick */}
+                              <div style={{ position: "absolute", bottom: 10, left: 0, width: 1, height: 8, background: isInRange ? "#10B981" : "var(--color-border-secondary)" }} />
+                              {/* status */}
+                              {(isTaken || (isPast && !isTaken)) && (
+                                <div style={{ position: "absolute", top: 22, left: "50%", transform: "translateX(-50%)", fontSize: 8, color: isTaken ? "#F87171" : "var(--color-text-secondary)", whiteSpace: "nowrap" }}>
+                                  {isTaken ? "Taken" : "Past"}
+                                </div>
+                              )}
+                              {/* IN indicator */}
+                              {isStartSlot && (
+                                <div style={{ position: "absolute", bottom: 0, left: 0, transform: "translateX(-50%)", display: "flex", flexDirection: "column", alignItems: "center", gap: 1, zIndex: 2 }}>
+                                  <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#10B981", boxShadow: "0 0 7px rgba(16,185,129,0.8)" }} />
+                                  <span style={{ fontSize: 8, color: "#6EE7B7", fontWeight: 800, lineHeight: 1, letterSpacing: "0.04em" }}>IN</span>
+                                </div>
+                              )}
+                              {/* OUT indicator */}
+                              {isEndSlot && (
+                                <div style={{ position: "absolute", bottom: 0, right: 0, transform: "translateX(50%)", display: "flex", flexDirection: "column", alignItems: "center", gap: 1, zIndex: 2 }}>
+                                  <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#F59E0B", boxShadow: "0 0 7px rgba(245,158,11,0.8)" }} />
+                                  <span style={{ fontSize: 8, color: "#FCD34D", fontWeight: 800, lineHeight: 1, letterSpacing: "0.04em" }}>OUT</span>
+                                </div>
+                              )}
+                            </button>
+                          );
+                        })}
+                        {/* row end label */}
+                        <div style={{ flexShrink: 0 }}>
+                          <div style={{ fontSize: 10, marginBottom: 5, color: "var(--color-text-secondary)", whiteSpace: "nowrap" }}>
+                            {formatHour(`${String(rowEndHour).padStart(2, "0")}:00`)}
                           </div>
-
-                          <div style={{ fontSize: 11, color: "var(--color-text-secondary)", display: "grid", gap: 2 }}>
-                            <span>In: {form.startTime ? formatHour(form.startTime) : "--:--"}</span>
-                            <span>Out: {form.endTime ? formatHour(form.endTime) : "--:--"}</span>
-                            <span>Duration: {durationMinutes > 0 ? `${Math.floor(durationMinutes / 60)}h ${durationMinutes % 60}m` : "--"}</span>
-                          </div>
+                          <div style={{ width: 1, height: 6, background: "var(--color-border-secondary)" }} />
                         </div>
-                      );
-                    })()}
-                  </div>
+                      </div>
+                    );
+                  })}
+                  {form.startTime && (
+                    <p style={{ margin: "6px 0 0", fontSize: 12, color: "var(--color-text-secondary)" }}>
+                      <span style={{ color: "#6EE7B7", fontWeight: 600 }}>IN</span> {formatHour(form.startTime)}
+                      {" – "}
+                      <span style={{ color: "#FCD34D", fontWeight: 600 }}>OUT</span> {formatHour(form.endTime)}
+                      {" · "}
+                      <span style={{ color: "#A7F3D0", fontWeight: 600 }}>
+                        Duration {Math.max(0, (toMinutes(form.endTime) - toMinutes(form.startTime)) / 60)}h
+                      </span>
+                    </p>
+                  )}
                 </div>
               </div>
             )}

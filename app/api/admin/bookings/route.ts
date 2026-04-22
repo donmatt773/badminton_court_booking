@@ -7,6 +7,7 @@ import { CourtModel } from "@/lib/server/graphql/models/Court";
 import { findOverlappingBlockedSlot } from "@/lib/server/graphql/lib/blocked-slots";
 import { getFriendlyErrorMessage } from "@/lib/server/friendly-error";
 import { triggerBookingsUpdated } from "@/lib/server/pusher-server";
+import { computeBookingPricing } from "@/lib/server/bookings/pricing";
 
 const createSchema = z.object({
   customerId: z.string().min(1),
@@ -85,6 +86,8 @@ export async function POST(request: Request): Promise<Response> {
       bookingDate: body.bookingDate,
       startTime: body.startTime,
       endTime: body.endTime,
+      ...computeBookingPricing(court.price ?? 0, body.startTime, body.endTime),
+      pricingSnapshotSource: "captured_at_booking",
       status: body.status,
       denialReason: body.status === "DENIED" ? body.denialReason : null,
       paymentReference: body.paymentReference ?? null,

@@ -16,6 +16,8 @@
     "graphql-subscriptions": "^2.0.0",
     "graphql-type-json": "^0.3.2",
     "graphql-yoga": "^5.16.2",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.7",
     "mongoose": "^8.14.1",
     "next": "16.2.3",
     "node-cron": "^4.0.7",

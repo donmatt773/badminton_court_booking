@@ -81,6 +81,8 @@ Realtime channels:
 - Customer reservation modal is now a compact 2-step flow:
 	- Step 1: date and time selection
 	- Step 2: customer details and payment method
+- Bookings now store pricing snapshots (`appliedHourlyRate`, `durationHours`, `chargedAmount`) so revenue stays stable after later court price changes.
+- Legacy bookings missing pricing snapshots are backfilled once at startup using the booking duration and the court price currently stored in the database.
 - Customer time selection supports minute precision (for example, 4:20) instead of hourly-only slot picking.
 - Past-time booking prevention is enforced for today on customer, receptionist, and admin booking flows.
 - Receptionist cash payment flow now validates required amount:
