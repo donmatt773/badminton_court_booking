@@ -50,6 +50,19 @@ type RevenueCourt = {
   price: number;
 };
 
+type RevenueBlockedSession = {
+  _id: string;
+  courtId: string;
+  bookingDate: string;
+  startTime: string;
+  endTime: string;
+  sessionStartedAt?: string | null;
+  sessionEndedAt?: string | null;
+  hourlyRateSnapshot?: number | null;
+  actualDurationHours?: number | null;
+  chargedAmount?: number | null;
+};
+
 function hoursFromTimes(start: string, end: string): number {
   const [sh] = start.split(":").map(Number);
   const [eh] = end.split(":").map(Number);
@@ -60,13 +73,62 @@ const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov
 const BUSINESS_NAME = "C-One Sports Center";
 const BUSINESS_ADDRESS = "Sports Center Complex, Main Road";
 const BUSINESS_LOGO_PATH = "/assets/LOGO-NEW-SPORTSCENTER.png";
+const PAGE_SIZE = 10;
+
+const PaginationControls: FC<{
+  currentPage: number;
+  totalPages: number;
+  onPageChange: (page: number) => void;
+}> = ({ currentPage, totalPages, onPageChange }) => {
+  if (totalPages <= 1) {
+    return null;
+  }
+
+  return (
+    <div className="mt-3 flex items-center justify-between gap-2 px-4 py-3 border-t border-gray-800">
+      <p className="text-xs text-gray-500">Page {currentPage} of {totalPages}</p>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => onPageChange(currentPage - 1)}
+          disabled={currentPage <= 1}
+          className="rounded border border-gray-700 bg-[#0B0F1A] px-2.5 py-1 text-xs text-gray-200 hover:border-emerald-500 disabled:opacity-40"
+        >
+          Previous
+        </button>
+        <button
+          type="button"
+          onClick={() => onPageChange(currentPage + 1)}
+          disabled={currentPage >= totalPages}
+          className="rounded border border-gray-700 bg-[#0B0F1A] px-2.5 py-1 text-xs text-gray-200 hover:border-emerald-500 disabled:opacity-40"
+        >
+          Next
+        </button>
+      </div>
+    </div>
+  );
+};
+
+function toYearMonth(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value.slice(0, 7);
+  }
+
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
 
 const RevenueViewer: FC<{ staffName: string }> = ({ staffName }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [bookings, setBookings] = useState<RevenueBooking[]>([]);
   const [courts, setCourts] = useState<RevenueCourt[]>([]);
+  const [blockedSessions, setBlockedSessions] = useState<RevenueBlockedSession[]>([]);
   const [filterMonth, setFilterMonth] = useState<string>(() => new Date().toISOString().slice(0, 7));
+  const [blockedSessionsPage, setBlockedSessionsPage] = useState(1);
+  const [legacyReviewPage, setLegacyReviewPage] = useState(1);
+  const [courtRevenuePage, setCourtRevenuePage] = useState(1);
+  const [recentTransactionsPage, setRecentTransactionsPage] = useState(1);
 
   useEffect(() => {
     let mounted = true;
@@ -74,18 +136,21 @@ const RevenueViewer: FC<{ staffName: string }> = ({ staffName }) => {
       setLoading(true);
       setError(null);
       try {
-        const [bRes, cRes] = await Promise.all([
+        const [bRes, cRes, blockedRes] = await Promise.all([
           fetch('/api/admin/bookings', { credentials: 'include' }),
           fetch('/api/admin/courts', { credentials: 'include' }),
+          fetch('/api/admin/blocked-slots', { credentials: 'include' }),
         ]);
-        if (!bRes.ok || !cRes.ok) throw new Error('Failed to fetch data');
-        const [bBody, cBody] = await Promise.all([bRes.json(), cRes.json()]) as [
+        if (!bRes.ok || !cRes.ok || !blockedRes.ok) throw new Error('Failed to fetch data');
+        const [bBody, cBody, blockedBody] = await Promise.all([bRes.json(), cRes.json(), blockedRes.json()]) as [
           { data?: RevenueBooking[] },
           { data?: RevenueCourt[] },
+          { data?: RevenueBlockedSession[] },
         ];
         if (!mounted) return;
         setBookings(bBody.data ?? []);
         setCourts(cBody.data ?? []);
+        setBlockedSessions(blockedBody.data ?? []);
       } catch (err) {
         if (!mounted) return;
         setError(err instanceof Error ? err.message : 'Failed to load revenue data');
@@ -99,7 +164,12 @@ const RevenueViewer: FC<{ staffName: string }> = ({ staffName }) => {
 
   // Derive available months from booking dates
   const availableMonths = Array.from(
-    new Set(bookings.map((b) => b.bookingDate.slice(0, 7)))
+    new Set([
+      ...bookings.map((b) => b.bookingDate.slice(0, 7)),
+      ...blockedSessions
+        .filter((session) => !!session.sessionEndedAt)
+        .map((session) => toYearMonth(session.sessionEndedAt as string)),
+    ])
   ).sort().reverse();
 
   const priceMap = Object.fromEntries(courts.map((c) => [c._id, c.price ?? 0]));
@@ -131,6 +201,20 @@ const RevenueViewer: FC<{ staffName: string }> = ({ staffName }) => {
   const cashRevenue  = filtered.filter((b) => b.paymentMethod === "cash" || !b.paymentMethod).reduce((sum, b) => sum + calcAmount(b), 0);
   const onlineRevenue = filtered.filter((b) => b.paymentMethod === "online").reduce((sum, b) => sum + calcAmount(b), 0);
 
+  const completedBlockedSessions = blockedSessions.filter(
+    (session) =>
+      !!session.sessionEndedAt &&
+      typeof session.chargedAmount === "number" &&
+      toYearMonth(session.sessionEndedAt as string) === filterMonth
+  );
+
+  const blockedSessionsRevenue = completedBlockedSessions.reduce(
+    (sum, session) => sum + (session.chargedAmount ?? 0),
+    0
+  );
+
+  const combinedRevenue = totalRevenue + blockedSessionsRevenue;
+
   // Per-court breakdown
   const courtRevenue: Record<string, { name: string; amount: number; count: number }> = {};
   for (const b of filtered) {
@@ -157,6 +241,35 @@ const RevenueViewer: FC<{ staffName: string }> = ({ staffName }) => {
 
   const [filterYear, filterMonthNum] = filterMonth.split("-");
   const monthLabel = `${MONTHS[parseInt(filterMonthNum) - 1]} ${filterYear}`;
+
+  useEffect(() => {
+    setBlockedSessionsPage(1);
+    setLegacyReviewPage(1);
+    setCourtRevenuePage(1);
+    setRecentTransactionsPage(1);
+  }, [filterMonth]);
+
+  function paginateRows<RowType>(rows: RowType[], currentPage: number) {
+    const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+    const safePage = Math.min(currentPage, totalPages);
+    const startIndex = (safePage - 1) * PAGE_SIZE;
+
+    return {
+      currentPage: safePage,
+      totalPages,
+      rows: rows.slice(startIndex, startIndex + PAGE_SIZE),
+    };
+  }
+
+  const paginatedBlockedSessions = paginateRows(
+    completedBlockedSessions
+      .slice()
+      .sort((a, b) => new Date(b.sessionEndedAt as string).getTime() - new Date(a.sessionEndedAt as string).getTime()),
+    blockedSessionsPage
+  );
+  const paginatedLegacyReview = paginateRows(reviewableLegacyBookings, legacyReviewPage);
+  const paginatedCourtRows = paginateRows(courtRows, courtRevenuePage);
+  const paginatedRecentTransactions = paginateRows(allPaidThisMonth, recentTransactionsPage);
 
   async function loadLogoDataUrl(): Promise<string | null> {
     try {
@@ -216,10 +329,13 @@ const RevenueViewer: FC<{ staffName: string }> = ({ staffName }) => {
       startY: 57,
       head: [["Metric", "Value"]],
       body: [
-        ["Total Revenue", money(totalRevenue)],
+        ["Booking Revenue", money(totalRevenue)],
+        ["Blocked Session Revenue", money(blockedSessionsRevenue)],
+        ["Combined Revenue", money(combinedRevenue)],
         ["Cash Revenue", money(cashRevenue)],
         ["Online Revenue", money(onlineRevenue)],
         ["Paid Bookings", String(filtered.length)],
+        ["Closed Blocked Sessions", String(completedBlockedSessions.length)],
       ],
       styles: { fontSize: 9 },
       headStyles: { fillColor: [16, 185, 129] },
@@ -256,6 +372,103 @@ const RevenueViewer: FC<{ staffName: string }> = ({ staffName }) => {
     });
 
     doc.save(`revenue-${filterMonth}.pdf`);
+  }
+
+  async function exportBlockedSessionsRevenuePdf(): Promise<void> {
+    const doc = new jsPDF();
+    const money = (value: number) => `PHP ${value.toLocaleString("en-PH", { minimumFractionDigits: 2 })}`;
+
+    let y = 16;
+    const logoDataUrl = await loadLogoDataUrl();
+    if (logoDataUrl) {
+      doc.addImage(logoDataUrl, "PNG", 14, 10, 18, 18);
+    }
+
+    doc.setFontSize(14);
+    doc.text(BUSINESS_NAME, 36, y);
+    doc.setFontSize(9);
+    doc.setTextColor(90, 90, 90);
+    doc.text(BUSINESS_ADDRESS, 36, y + 5);
+    doc.setTextColor(0, 0, 0);
+
+    doc.setFontSize(16);
+    doc.text("Blocked Sessions Revenue Report", 14, 36);
+    doc.setFontSize(10);
+    doc.text(`Period: ${monthLabel}`, 14, 42);
+    doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 47);
+    doc.text(`Generated by: ${staffName || "Receptionist"}`, 14, 52);
+
+    autoTable(doc, {
+      startY: 57,
+      head: [["Metric", "Value"]],
+      body: [
+        ["Blocked Sessions Revenue", money(blockedSessionsRevenue)],
+        ["Closed Sessions", String(completedBlockedSessions.length)],
+      ],
+      styles: { fontSize: 9 },
+      headStyles: { fillColor: [8, 145, 178] },
+    });
+
+    const firstTableY = (doc as { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? 65;
+    autoTable(doc, {
+      startY: firstTableY + 8,
+      head: [["Court", "Date", "Session In", "Session Out", "Hours", "Rate", "Amount"]],
+      body: completedBlockedSessions
+        .slice()
+        .sort((a, b) => new Date(b.sessionEndedAt as string).getTime() - new Date(a.sessionEndedAt as string).getTime())
+        .map((session) => [
+          courtNameMap[session.courtId] ?? session.courtId,
+          session.bookingDate,
+          new Date(session.sessionStartedAt as string).toLocaleString(),
+          new Date(session.sessionEndedAt as string).toLocaleString(),
+          (session.actualDurationHours ?? 0).toFixed(2),
+          money(session.hourlyRateSnapshot ?? 0),
+          money(session.chargedAmount ?? 0),
+        ]),
+      styles: { fontSize: 8 },
+      headStyles: { fillColor: [6, 95, 110] },
+    });
+
+    doc.save(`blocked-sessions-revenue-${filterMonth}.pdf`);
+  }
+
+  function exportBlockedSessionsRevenueCsv(): void {
+    if (completedBlockedSessions.length === 0) {
+      return;
+    }
+
+    const escapeCsv = (value: string | number): string => {
+      const text = String(value);
+      return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+    };
+
+    const rows = [
+      ["Court", "Date", "Session In", "Session Out", "Duration Hours", "Rate", "Amount"],
+      ...completedBlockedSessions
+        .slice()
+        .sort((a, b) => new Date(b.sessionEndedAt as string).getTime() - new Date(a.sessionEndedAt as string).getTime())
+        .map((session) => [
+          courtNameMap[session.courtId] ?? session.courtId,
+          session.bookingDate,
+          new Date(session.sessionStartedAt as string).toLocaleString(),
+          new Date(session.sessionEndedAt as string).toLocaleString(),
+          (session.actualDurationHours ?? 0).toFixed(2),
+          (session.hourlyRateSnapshot ?? 0).toFixed(2),
+          (session.chargedAmount ?? 0).toFixed(2),
+        ]),
+      ["TOTAL", "", "", "", "", "", blockedSessionsRevenue.toFixed(2)],
+    ];
+
+    const csv = rows.map((row) => row.map(escapeCsv).join(",")).join("\r\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `blocked-sessions-revenue-${filterMonth}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   }
 
   function exportLegacyRevenueReviewCsv(): void {
@@ -365,6 +578,82 @@ const RevenueViewer: FC<{ staffName: string }> = ({ staffName }) => {
             </div>
           </div>
 
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="rounded-lg border border-cyan-700/50 bg-cyan-950/20 px-4 py-4">
+              <p className="text-xs uppercase tracking-wide text-cyan-300 mb-1">Blocked Sessions Revenue</p>
+              <p className="text-2xl font-bold text-cyan-300">₱{blockedSessionsRevenue.toLocaleString("en-PH", { minimumFractionDigits: 2 })}</p>
+              <p className="text-xs text-cyan-100/70 mt-1">{completedBlockedSessions.length} closed session{completedBlockedSessions.length !== 1 ? "s" : ""} · {monthLabel}</p>
+            </div>
+            <div className="rounded-lg border border-emerald-700/50 bg-emerald-950/20 px-4 py-4">
+              <p className="text-xs uppercase tracking-wide text-emerald-300 mb-1">Combined Revenue</p>
+              <p className="text-2xl font-bold text-emerald-300">₱{combinedRevenue.toLocaleString("en-PH", { minimumFractionDigits: 2 })}</p>
+              <p className="text-xs text-emerald-100/70 mt-1">Booking + blocked sessions</p>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-cyan-700/40 bg-cyan-950/10 overflow-hidden">
+            <div className="border-b border-cyan-700/30 px-4 py-3 flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs uppercase tracking-wide text-cyan-200/80">Closed Blocked Sessions</p>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={exportBlockedSessionsRevenueCsv}
+                  disabled={completedBlockedSessions.length === 0}
+                  className="rounded border border-cyan-600/60 bg-cyan-900/30 px-2.5 py-1 text-xs text-cyan-100 hover:bg-cyan-900/50 disabled:opacity-40"
+                >
+                  Export CSV
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void exportBlockedSessionsRevenuePdf()}
+                  disabled={loading || completedBlockedSessions.length === 0}
+                  className="rounded border border-cyan-600/60 bg-cyan-900/30 px-2.5 py-1 text-xs text-cyan-100 hover:bg-cyan-900/50 disabled:opacity-40"
+                >
+                  Export PDF
+                </button>
+              </div>
+            </div>
+            {completedBlockedSessions.length === 0 ? (
+              <p className="text-sm text-cyan-100/70 px-4 py-3">No closed blocked sessions for this period.</p>
+            ) : (
+              <>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm min-w-130">
+                    <thead>
+                      <tr className="text-xs text-cyan-100/80 border-b border-cyan-700/30">
+                        <th className="text-left px-4 py-2 font-medium">Court</th>
+                        <th className="text-left px-4 py-2 font-medium">Date</th>
+                        <th className="text-left px-4 py-2 font-medium">Session In</th>
+                        <th className="text-left px-4 py-2 font-medium">Session Out</th>
+                        <th className="text-right px-4 py-2 font-medium">Hours</th>
+                        <th className="text-right px-4 py-2 font-medium">Rate</th>
+                        <th className="text-right px-4 py-2 font-medium">Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {paginatedBlockedSessions.rows.map((session) => (
+                          <tr key={`blocked-revenue-${session._id}`} className="border-b border-cyan-700/20 last:border-0">
+                            <td className="px-4 py-2 text-cyan-50">{courtNameMap[session.courtId] ?? session.courtId}</td>
+                            <td className="px-4 py-2 text-cyan-100/80">{session.bookingDate}</td>
+                            <td className="px-4 py-2 text-cyan-100/80">{new Date(session.sessionStartedAt as string).toLocaleString()}</td>
+                            <td className="px-4 py-2 text-cyan-100/80">{new Date(session.sessionEndedAt as string).toLocaleString()}</td>
+                            <td className="px-4 py-2 text-right text-cyan-100/80">{(session.actualDurationHours ?? 0).toFixed(2)}</td>
+                            <td className="px-4 py-2 text-right text-cyan-100/80">₱{(session.hourlyRateSnapshot ?? 0).toLocaleString("en-PH", { minimumFractionDigits: 2 })}</td>
+                            <td className="px-4 py-2 text-right font-semibold text-cyan-300">₱{(session.chargedAmount ?? 0).toLocaleString("en-PH", { minimumFractionDigits: 2 })}</td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+                <PaginationControls
+                  currentPage={paginatedBlockedSessions.currentPage}
+                  totalPages={paginatedBlockedSessions.totalPages}
+                  onPageChange={setBlockedSessionsPage}
+                />
+              </>
+            )}
+          </div>
+
           {reviewableLegacyBookings.length > 0 && (
             <div className="rounded-lg border border-amber-700/50 bg-amber-950/20 overflow-hidden">
               <div className="border-b border-amber-700/40 px-4 py-3 flex flex-wrap items-start justify-between gap-3">
@@ -398,7 +687,7 @@ const RevenueViewer: FC<{ staffName: string }> = ({ staffName }) => {
                     </tr>
                   </thead>
                   <tbody>
-                    {reviewableLegacyBookings.map((b) => (
+                    {paginatedLegacyReview.rows.map((b) => (
                       <tr key={`legacy-${b._id}`} className="border-b border-amber-700/20 last:border-0">
                         <td className="px-4 py-2 text-amber-50">{b.customer?.name ?? "—"}</td>
                         <td className="px-4 py-2 text-amber-100/80">{courtNameMap[b.courtId] ?? b.courtId}</td>
@@ -415,6 +704,11 @@ const RevenueViewer: FC<{ staffName: string }> = ({ staffName }) => {
                   </tbody>
                 </table>
               </div>
+              <PaginationControls
+                currentPage={paginatedLegacyReview.currentPage}
+                totalPages={paginatedLegacyReview.totalPages}
+                onPageChange={setLegacyReviewPage}
+              />
             </div>
           )}
 
@@ -446,33 +740,40 @@ const RevenueViewer: FC<{ staffName: string }> = ({ staffName }) => {
             {courtRows.length === 0 ? (
               <p className="text-sm text-gray-500 px-4 py-3">No paid bookings for this period.</p>
             ) : (
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-xs text-gray-500 border-b border-gray-800">
-                    <th className="text-left px-4 py-2 font-medium">Court</th>
-                    <th className="text-right px-4 py-2 font-medium">Bookings</th>
-                    <th className="text-right px-4 py-2 font-medium">Revenue</th>
-                    <th className="text-right px-4 py-2 font-medium">Share</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {courtRows.map((row) => (
-                    <tr key={row.name} className="border-b border-gray-800 last:border-0">
-                      <td className="px-4 py-2 text-gray-200">{row.name}</td>
-                      <td className="px-4 py-2 text-right text-gray-400">{row.count}</td>
-                      <td className="px-4 py-2 text-right font-semibold text-emerald-400">₱{row.amount.toLocaleString("en-PH", { minimumFractionDigits: 2 })}</td>
-                      <td className="px-4 py-2 text-right text-gray-400">
-                        <div className="flex items-center justify-end gap-2">
-                          <div className="w-16 h-1.5 bg-gray-700 rounded-full overflow-hidden">
-                            <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${totalRevenue > 0 ? (row.amount / totalRevenue) * 100 : 0}%` }} />
-                          </div>
-                          <span className="text-xs w-9 text-right">{totalRevenue > 0 ? ((row.amount / totalRevenue) * 100).toFixed(0) : 0}%</span>
-                        </div>
-                      </td>
+              <>
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-xs text-gray-500 border-b border-gray-800">
+                      <th className="text-left px-4 py-2 font-medium">Court</th>
+                      <th className="text-right px-4 py-2 font-medium">Bookings</th>
+                      <th className="text-right px-4 py-2 font-medium">Revenue</th>
+                      <th className="text-right px-4 py-2 font-medium">Share</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {paginatedCourtRows.rows.map((row) => (
+                      <tr key={row.name} className="border-b border-gray-800 last:border-0">
+                        <td className="px-4 py-2 text-gray-200">{row.name}</td>
+                        <td className="px-4 py-2 text-right text-gray-400">{row.count}</td>
+                        <td className="px-4 py-2 text-right font-semibold text-emerald-400">₱{row.amount.toLocaleString("en-PH", { minimumFractionDigits: 2 })}</td>
+                        <td className="px-4 py-2 text-right text-gray-400">
+                          <div className="flex items-center justify-end gap-2">
+                            <div className="w-16 h-1.5 bg-gray-700 rounded-full overflow-hidden">
+                              <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${totalRevenue > 0 ? (row.amount / totalRevenue) * 100 : 0}%` }} />
+                            </div>
+                            <span className="text-xs w-9 text-right">{totalRevenue > 0 ? ((row.amount / totalRevenue) * 100).toFixed(0) : 0}%</span>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <PaginationControls
+                  currentPage={paginatedCourtRows.currentPage}
+                  totalPages={paginatedCourtRows.totalPages}
+                  onPageChange={setCourtRevenuePage}
+                />
+              </>
             )}
           </div>
 
@@ -482,38 +783,45 @@ const RevenueViewer: FC<{ staffName: string }> = ({ staffName }) => {
             {allPaidThisMonth.length === 0 ? (
               <p className="text-sm text-gray-500 px-4 py-3">No transactions this period.</p>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm min-w-130">
-                  <thead>
-                    <tr className="text-xs text-gray-500 border-b border-gray-800">
-                      <th className="text-left px-4 py-2 font-medium">Customer</th>
-                      <th className="text-left px-4 py-2 font-medium">Court</th>
-                      <th className="text-left px-4 py-2 font-medium">Date</th>
-                      <th className="text-left px-4 py-2 font-medium">Time</th>
-                      <th className="text-left px-4 py-2 font-medium">Method</th>
-                      <th className="text-right px-4 py-2 font-medium">Amount</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {allPaidThisMonth.slice(0, 20).map((b) => (
-                      <tr key={b._id} className="border-b border-gray-800 last:border-0">
-                        <td className="px-4 py-2 text-gray-200">{b.customer?.name ?? "—"}</td>
-                        <td className="px-4 py-2 text-gray-400">{courtNameMap[b.courtId] ?? b.courtId}</td>
-                        <td className="px-4 py-2 text-gray-400">{b.bookingDate}</td>
-                        <td className="px-4 py-2 text-gray-400">{b.startTime}–{b.endTime}</td>
-                        <td className="px-4 py-2">
-                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${b.paymentMethod === "online" ? "bg-blue-900/50 text-blue-300" : "bg-yellow-900/40 text-yellow-300"}`}>
-                            {b.paymentMethod === "online" ? "Online" : "Cash"}
-                          </span>
-                        </td>
-                        <td className="px-4 py-2 text-right font-semibold text-emerald-400">
-                          ₱{calcAmount(b).toLocaleString("en-PH", { minimumFractionDigits: 2 })}
-                        </td>
+              <>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm min-w-130">
+                    <thead>
+                      <tr className="text-xs text-gray-500 border-b border-gray-800">
+                        <th className="text-left px-4 py-2 font-medium">Customer</th>
+                        <th className="text-left px-4 py-2 font-medium">Court</th>
+                        <th className="text-left px-4 py-2 font-medium">Date</th>
+                        <th className="text-left px-4 py-2 font-medium">Time</th>
+                        <th className="text-left px-4 py-2 font-medium">Method</th>
+                        <th className="text-right px-4 py-2 font-medium">Amount</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody>
+                      {paginatedRecentTransactions.rows.map((b) => (
+                        <tr key={b._id} className="border-b border-gray-800 last:border-0">
+                          <td className="px-4 py-2 text-gray-200">{b.customer?.name ?? "—"}</td>
+                          <td className="px-4 py-2 text-gray-400">{courtNameMap[b.courtId] ?? b.courtId}</td>
+                          <td className="px-4 py-2 text-gray-400">{b.bookingDate}</td>
+                          <td className="px-4 py-2 text-gray-400">{b.startTime}–{b.endTime}</td>
+                          <td className="px-4 py-2">
+                            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${b.paymentMethod === "online" ? "bg-blue-900/50 text-blue-300" : "bg-yellow-900/40 text-yellow-300"}`}>
+                              {b.paymentMethod === "online" ? "Online" : "Cash"}
+                            </span>
+                          </td>
+                          <td className="px-4 py-2 text-right font-semibold text-emerald-400">
+                            ₱{calcAmount(b).toLocaleString("en-PH", { minimumFractionDigits: 2 })}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <PaginationControls
+                  currentPage={paginatedRecentTransactions.currentPage}
+                  totalPages={paginatedRecentTransactions.totalPages}
+                  onPageChange={setRecentTransactionsPage}
+                />
+              </>
             )}
           </div>
         </div>

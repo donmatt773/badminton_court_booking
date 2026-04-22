@@ -6,12 +6,14 @@ import { BlockedSlotModel } from "@/lib/server/graphql/models/BlockedSlot";
 import { findOverlappingBlockedSlot } from "@/lib/server/graphql/lib/blocked-slots";
 import { getFriendlyErrorMessage } from "@/lib/server/friendly-error";
 import { triggerBlockedSlotsUpdated } from "@/lib/server/pusher-server";
+import { isValidBlockedSlotTimeRange } from "@/lib/shared/blocked-slot-time";
 
 const createSchema = z
   .object({
     courtId: z.string().min(1).optional(),
     courtIds: z.array(z.string().min(1)).max(100).optional(),
-    bookingDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    bookingDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    bookingDates: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).max(366).optional(),
     startTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
     endTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
     reason: z.string().trim().max(200).optional(),
@@ -19,6 +21,8 @@ const createSchema = z
   .superRefine((value, ctx) => {
     const hasCourtId = Boolean(value.courtId);
     const hasCourtIds = Array.isArray(value.courtIds) && value.courtIds.length > 0;
+    const hasBookingDate = Boolean(value.bookingDate);
+    const hasBookingDates = Array.isArray(value.bookingDates) && value.bookingDates.length > 0;
 
     if (!hasCourtId && !hasCourtIds) {
       ctx.addIssue({
@@ -28,10 +32,18 @@ const createSchema = z
       });
     }
 
-    if (value.startTime >= value.endTime) {
+    if (!hasBookingDate && !hasBookingDates) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: "endTime must be after startTime",
+        message: "bookingDate or bookingDates is required",
+        path: ["bookingDates"],
+      });
+    }
+
+    if (!isValidBlockedSlotTimeRange(value.startTime, value.endTime)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "endTime must be after startTime unless it ends at 12:00 AM",
         path: ["endTime"],
       });
     }
@@ -77,6 +89,9 @@ export async function POST(request: Request): Promise<Response> {
     const courtIds = Array.from(
       new Set([...(body.courtIds ?? []), ...(body.courtId ? [body.courtId] : [])])
     );
+    const bookingDates = Array.from(
+      new Set([...(body.bookingDates ?? []), ...(body.bookingDate ? [body.bookingDate] : [])])
+    ).sort();
 
     const courts = await CourtModel.find({ _id: { $in: courtIds } }).select("_id");
     const foundCourtIds = new Set(courts.map((court) => String(court._id)));
@@ -90,34 +105,37 @@ export async function POST(request: Request): Promise<Response> {
     }
 
     const created: unknown[] = [];
-    const skipped: Array<{ courtId: string; reason: string }> = [];
+    const skipped: Array<{ courtId: string; bookingDate: string; reason: string }> = [];
 
-    for (const courtId of courtIds) {
-      const overlap = await findOverlappingBlockedSlot({
-        courtId,
-        bookingDate: body.bookingDate,
-        startTime: body.startTime,
-        endTime: body.endTime,
-      });
-
-      if (overlap) {
-        skipped.push({
+    for (const bookingDate of bookingDates) {
+      for (const courtId of courtIds) {
+        const overlap = await findOverlappingBlockedSlot({
           courtId,
-          reason: "Overlaps an existing blocked range",
+          bookingDate,
+          startTime: body.startTime,
+          endTime: body.endTime,
         });
-        continue;
+
+        if (overlap) {
+          skipped.push({
+            courtId,
+            bookingDate,
+            reason: "Overlaps an existing blocked range",
+          });
+          continue;
+        }
+
+        const blockedSlot = await BlockedSlotModel.create({
+          courtId,
+          bookingDate,
+          startTime: body.startTime,
+          endTime: body.endTime,
+          reason: body.reason?.trim() || null,
+          createdByUserId: session.userId,
+        });
+
+        created.push(blockedSlot);
       }
-
-      const blockedSlot = await BlockedSlotModel.create({
-        courtId,
-        bookingDate: body.bookingDate,
-        startTime: body.startTime,
-        endTime: body.endTime,
-        reason: body.reason?.trim() || null,
-        createdByUserId: session.userId,
-      });
-
-      created.push(blockedSlot);
     }
 
     if (created.length === 0) {

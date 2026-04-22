@@ -3,6 +3,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { getPusherClient } from "@/lib/client/pusher-client";
 import { REALTIME_CHANNELS, REALTIME_EVENTS } from "@/lib/shared/realtime-events";
+import { isValidBlockedSlotTimeRange } from "@/lib/shared/blocked-slot-time";
 
 type Court = {
   _id: string;
@@ -16,6 +17,11 @@ type BlockedSlot = {
   startTime: string;
   endTime: string;
   reason?: string | null;
+  sessionStartedAt?: string | null;
+  sessionEndedAt?: string | null;
+  hourlyRateSnapshot?: number | null;
+  actualDurationHours?: number | null;
+  chargedAmount?: number | null;
   createdAt: string;
 };
 
@@ -38,6 +44,46 @@ function todayISODate(): string {
   return `${year}-${month}-${day}`;
 }
 
+function currentMonthISO(): string {
+  return todayISODate().slice(0, 7);
+}
+
+function currentYearISO(): string {
+  return todayISODate().slice(0, 4);
+}
+
+function listDatesInMonth(month: string): string[] {
+  const [yearText, monthText] = month.split("-");
+  const year = Number(yearText);
+  const monthNumber = Number(monthText);
+  if (!Number.isInteger(year) || !Number.isInteger(monthNumber) || monthNumber < 1 || monthNumber > 12) {
+    return [];
+  }
+
+  const dates: string[] = [];
+  const totalDays = new Date(year, monthNumber, 0).getDate();
+  for (let day = 1; day <= totalDays; day += 1) {
+    dates.push(`${year}-${String(monthNumber).padStart(2, "0")}-${String(day).padStart(2, "0")}`);
+  }
+  return dates;
+}
+
+function listDatesInYear(yearText: string): string[] {
+  const year = Number(yearText);
+  if (!Number.isInteger(year)) {
+    return [];
+  }
+
+  const dates: string[] = [];
+  for (let month = 1; month <= 12; month += 1) {
+    const totalDays = new Date(year, month, 0).getDate();
+    for (let day = 1; day <= totalDays; day += 1) {
+      dates.push(`${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`);
+    }
+  }
+  return dates;
+}
+
 function currentTimeHHMM(): string {
   const now = new Date();
   const hours = String(now.getHours()).padStart(2, "0");
@@ -46,8 +92,11 @@ function currentTimeHHMM(): string {
 }
 
 type NewBlockForm = {
+  mode: "daily" | "monthly" | "yearly";
   courtIds: string[];
   bookingDate: string;
+  bookingMonth: string;
+  bookingYear: string;
   startTime: string;
   endTime: string;
   reason: string;
@@ -61,17 +110,35 @@ export function BlockedSlotManager() {
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [popupMessage, setPopupMessage] = useState<string | null>(null);
+  const [sessionActionId, setSessionActionId] = useState<string | null>(null);
 
   const today = todayISODate();
   const nowTime = currentTimeHHMM();
 
   const [form, setForm] = useState<NewBlockForm>({
+    mode: "daily",
     courtIds: [],
     bookingDate: todayISODate(),
+    bookingMonth: currentMonthISO(),
+    bookingYear: currentYearISO(),
     startTime: "08:00",
     endTime: "09:00",
     reason: "",
   });
+
+  const bookingDates = useMemo(() => {
+    let dates: string[] = [];
+    if (form.mode === "daily") {
+      dates = [form.bookingDate];
+    } else if (form.mode === "monthly") {
+      dates = listDatesInMonth(form.bookingMonth);
+    } else {
+      dates = listDatesInYear(form.bookingYear);
+    }
+
+    const uniqueFutureDates = Array.from(new Set(dates)).filter((date) => date >= today).sort();
+    return uniqueFutureDates;
+  }, [form.bookingDate, form.bookingMonth, form.bookingYear, form.mode, today]);
 
   const courtNameById = useMemo(() => {
     const map: Record<string, string> = {};
@@ -102,7 +169,9 @@ export function BlockedSlotManager() {
       const courtsBody = (await courtsRes.json()) as { data?: Court[] };
       const blockedBody = (await blockedRes.json()) as { data?: BlockedSlot[] };
 
-      const nextCourts = courtsBody.data ?? [];
+      const nextCourts = (courtsBody.data ?? []).slice().sort((left, right) =>
+        left.name.localeCompare(right.name, undefined, { numeric: true, sensitivity: "base" })
+      );
       setCourts(nextCourts);
       setBlockedSlots(blockedBody.data ?? []);
 
@@ -156,12 +225,17 @@ export function BlockedSlotManager() {
       return;
     }
 
-    if (form.startTime >= form.endTime) {
-      setError("End time must be after start time");
+    if (!isValidBlockedSlotTimeRange(form.startTime, form.endTime)) {
+      setError("End time must be after start time unless it ends at 12:00 AM");
       return;
     }
 
-    if (form.bookingDate === today && form.startTime < nowTime) {
+    if (bookingDates.length === 0) {
+      setError("No future dates found for the selected recurrence");
+      return;
+    }
+
+    if (bookingDates.includes(today) && form.startTime < nowTime) {
       setError("Start time cannot be in the past");
       return;
     }
@@ -176,7 +250,7 @@ export function BlockedSlotManager() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           courtIds: form.courtIds,
-          bookingDate: form.bookingDate,
+          bookingDates,
           startTime: form.startTime,
           endTime: form.endTime,
           reason: form.reason.trim() || undefined,
@@ -240,6 +314,35 @@ export function BlockedSlotManager() {
       setBlockedSlots((prev) => prev.filter((slot) => slot._id !== id));
     } catch (deleteError) {
       setError(deleteError instanceof Error ? deleteError.message : "Failed to delete blocked slot");
+    }
+  }
+
+  async function handleSessionAction(id: string, action: "begin" | "end"): Promise<void> {
+    setError(null);
+    setSuccessMessage(null);
+    setSessionActionId(id);
+
+    try {
+      const response = await fetch(`/api/admin/blocked-slots/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      });
+
+      const body = (await response.json().catch(() => null)) as
+        | { error?: { message?: string } }
+        | null;
+
+      if (!response.ok) {
+        throw new Error(body?.error?.message ?? "Failed to update session");
+      }
+
+      setSuccessMessage(action === "begin" ? "Session started." : "Session ended and payment calculated.");
+      await loadData();
+    } catch (sessionError) {
+      setError(sessionError instanceof Error ? sessionError.message : "Failed to update session");
+    } finally {
+      setSessionActionId(null);
     }
   }
 
@@ -319,19 +422,56 @@ export function BlockedSlotManager() {
           </div>
         </div>
 
-        <input
-          type="date"
-          value={form.bookingDate}
-          onChange={(e) => setForm((prev) => ({ ...prev, bookingDate: e.target.value }))}
+        <select
+          value={form.mode}
+          onChange={(e) =>
+            setForm((prev) => ({
+              ...prev,
+              mode: e.target.value as NewBlockForm["mode"],
+            }))
+          }
           className="rounded border border-gray-600 bg-[#1F2937] text-gray-200 px-2 py-2 text-sm"
           required
-        />
+        >
+          <option value="daily">Daily</option>
+          <option value="monthly">Monthly</option>
+          <option value="yearly">Yearly</option>
+        </select>
+
+        {form.mode === "daily" ? (
+          <input
+            type="date"
+            value={form.bookingDate}
+            onChange={(e) => setForm((prev) => ({ ...prev, bookingDate: e.target.value }))}
+            className="rounded border border-gray-600 bg-[#1F2937] text-gray-200 px-2 py-2 text-sm"
+            required
+          />
+        ) : form.mode === "monthly" ? (
+          <input
+            type="month"
+            value={form.bookingMonth}
+            onChange={(e) => setForm((prev) => ({ ...prev, bookingMonth: e.target.value }))}
+            className="rounded border border-gray-600 bg-[#1F2937] text-gray-200 px-2 py-2 text-sm"
+            required
+          />
+        ) : (
+          <input
+            type="number"
+            value={form.bookingYear}
+            min={new Date().getFullYear()}
+            max={new Date().getFullYear() + 10}
+            onChange={(e) => setForm((prev) => ({ ...prev, bookingYear: e.target.value }))}
+            className="rounded border border-gray-600 bg-[#1F2937] text-gray-200 px-2 py-2 text-sm"
+            placeholder="Year"
+            required
+          />
+        )}
 
         <input
           type="time"
           value={form.startTime}
           onChange={(e) => setForm((prev) => ({ ...prev, startTime: e.target.value }))}
-          min={form.bookingDate === today ? nowTime : undefined}
+          min={bookingDates.includes(today) ? nowTime : undefined}
           className="rounded border border-gray-600 bg-[#1F2937] text-gray-200 px-2 py-2 text-sm"
           required
         />
@@ -341,7 +481,7 @@ export function BlockedSlotManager() {
           value={form.endTime}
           onChange={(e) => setForm((prev) => ({ ...prev, endTime: e.target.value }))}
           min={
-            form.bookingDate === today
+            bookingDates.includes(today)
               ? form.startTime > nowTime
                 ? form.startTime
                 : nowTime
@@ -382,7 +522,7 @@ export function BlockedSlotManager() {
       ) : null}
 
       <div style={{ overflowX: "auto" }}>
-        <table className="w-full border-collapse bg-[#1F2937] rounded-xl shadow text-sm" style={{ minWidth: "1100px" }}>
+        <table className="w-full border-collapse bg-[#1F2937] rounded-xl shadow text-sm" style={{ minWidth: "1260px" }}>
           <thead>
             <tr className="bg-[#0B0F1A] text-gray-400">
               <th className="px-2 py-2 font-semibold text-left whitespace-nowrap">Court</th>
@@ -390,6 +530,8 @@ export function BlockedSlotManager() {
               <th className="px-2 py-2 font-semibold text-left whitespace-nowrap">Start</th>
               <th className="px-2 py-2 font-semibold text-left whitespace-nowrap">End</th>
               <th className="px-2 py-2 font-semibold text-left whitespace-nowrap">Reason</th>
+              <th className="px-2 py-2 font-semibold text-left whitespace-nowrap">Session</th>
+              <th className="px-2 py-2 font-semibold text-right whitespace-nowrap">Payment</th>
               <th className="px-2 py-2 font-semibold text-left whitespace-nowrap">Created</th>
               <th className="px-2 py-2 font-semibold text-left whitespace-nowrap">Action</th>
             </tr>
@@ -397,7 +539,7 @@ export function BlockedSlotManager() {
           <tbody>
             {!isLoading && blockedSlots.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-2 py-6 text-center italic text-slate-500">
+                <td colSpan={9} className="px-2 py-6 text-center italic text-slate-500">
                   No blocked slots found.
                 </td>
               </tr>
@@ -409,15 +551,69 @@ export function BlockedSlotManager() {
                 <td className="px-2 py-2 text-gray-100 whitespace-nowrap">{formatTime12h(slot.startTime)}</td>
                 <td className="px-2 py-2 text-gray-100 whitespace-nowrap">{formatTime12h(slot.endTime)}</td>
                 <td className="px-2 py-2 text-gray-100">{slot.reason || "-"}</td>
+                <td className="px-2 py-2 text-gray-100 whitespace-nowrap">
+                  {!slot.sessionStartedAt ? (
+                    <span className="text-xs text-gray-400">Not started</span>
+                  ) : slot.sessionStartedAt && !slot.sessionEndedAt ? (
+                    <div className="text-xs">
+                      <div className="text-emerald-400 font-semibold">Running</div>
+                      <div className="text-gray-400">In: {new Date(slot.sessionStartedAt).toLocaleString()}</div>
+                    </div>
+                  ) : (
+                    <div className="text-xs">
+                      <div className="text-emerald-400 font-semibold">Completed</div>
+                      <div className="text-gray-400">In: {new Date(slot.sessionStartedAt as string).toLocaleString()}</div>
+                      <div className="text-gray-400">Out: {new Date(slot.sessionEndedAt as string).toLocaleString()}</div>
+                    </div>
+                  )}
+                </td>
+                <td className="px-2 py-2 text-right whitespace-nowrap">
+                  {typeof slot.chargedAmount === "number" ? (
+                    <div>
+                      <div className="text-emerald-400 font-semibold">
+                        PHP {slot.chargedAmount.toLocaleString("en-PH", { minimumFractionDigits: 2 })}
+                      </div>
+                      <div className="text-xs text-gray-400">
+                        {slot.actualDurationHours ?? 0}h x PHP {(slot.hourlyRateSnapshot ?? 0).toLocaleString("en-PH", { minimumFractionDigits: 2 })}
+                      </div>
+                    </div>
+                  ) : (
+                    <span className="text-xs text-gray-500">-</span>
+                  )}
+                </td>
                 <td className="px-2 py-2 text-gray-100 whitespace-nowrap">{new Date(slot.createdAt).toLocaleString()}</td>
                 <td className="px-2 py-2">
-                  <button
-                    type="button"
-                    onClick={() => void handleDeleteBlock(slot._id)}
-                    className="px-2 py-0.5 rounded bg-red-600 text-white text-sm font-semibold hover:bg-red-700"
-                  >
-                    Remove
-                  </button>
+                  <div className="flex items-center gap-2">
+                    {!slot.sessionStartedAt ? (
+                      <button
+                        type="button"
+                        disabled={sessionActionId === slot._id}
+                        onClick={() => void handleSessionAction(slot._id, "begin")}
+                        className="px-2 py-0.5 rounded bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-60"
+                      >
+                        Begin
+                      </button>
+                    ) : slot.sessionStartedAt && !slot.sessionEndedAt ? (
+                      <button
+                        type="button"
+                        disabled={sessionActionId === slot._id}
+                        onClick={() => void handleSessionAction(slot._id, "end")}
+                        className="px-2 py-0.5 rounded bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 disabled:opacity-60"
+                      >
+                        End
+                      </button>
+                    ) : (
+                      <span className="text-xs text-gray-500">Closed</span>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => void handleDeleteBlock(slot._id)}
+                      className="px-2 py-0.5 rounded bg-red-600 text-white text-sm font-semibold hover:bg-red-700"
+                    >
+                      Remove
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}

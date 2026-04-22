@@ -29,6 +29,29 @@ const blockedSlotSchema = new Schema(
       maxlength: 200,
       default: null,
     },
+    sessionStartedAt: {
+      type: Date,
+      default: null,
+    },
+    sessionEndedAt: {
+      type: Date,
+      default: null,
+    },
+    hourlyRateSnapshot: {
+      type: Number,
+      min: 0,
+      default: null,
+    },
+    actualDurationHours: {
+      type: Number,
+      min: 0,
+      default: null,
+    },
+    chargedAmount: {
+      type: Number,
+      min: 0,
+      default: null,
+    },
     createdByUserId: {
       type: String,
       trim: true,

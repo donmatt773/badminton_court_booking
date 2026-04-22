@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useState, FC } from "react";
+import { blockedSlotRangesOverlap } from "@/lib/shared/blocked-slot-time";
 
 interface Court {
   _id: string;
@@ -89,7 +90,7 @@ export const WalkInBookingModal: FC<WalkInBookingModalProps> = ({ onClose, onCre
   }
 
   function rangesOverlapLocal(sA: string, eA: string, sB: string, eB: string): boolean {
-    return sA < eB && eA > sB;
+    return blockedSlotRangesOverlap(sA, eA, sB, eB);
   }
 
   function isSlotTaken(sStart: string, sEnd: string): boolean {

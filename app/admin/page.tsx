@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 
 type AdminUser = {
   id: string;
@@ -32,6 +34,8 @@ type Booking = {
   startTime: string;
   endTime: string;
   status: string;
+  chargedAmount?: number | null;
+  paymentMethod?: string | null;
   paymentReference?: string | null;
   denialReason?: string | null;
   expiresAt?: string | null;
@@ -54,6 +58,21 @@ type AbuseLog = {
   createdAt: string;
   metadata?: Record<string, unknown> | null;
 };
+
+type BlockedSessionRevenueRecord = {
+  _id: string;
+  courtId: string;
+  bookingDate: string;
+  startTime: string;
+  endTime: string;
+  sessionStartedAt?: string | null;
+  sessionEndedAt?: string | null;
+  hourlyRateSnapshot?: number | null;
+  actualDurationHours?: number | null;
+  chargedAmount?: number | null;
+};
+
+type AdminTablePageKey = "customers" | "bookings" | "users" | "courts" | "abuse" | "revenue" | "revenueBookings";
 
 type EditModalState =
   | {
@@ -246,6 +265,62 @@ function currentTimeHHMM(): string {
   return `${hours}:${minutes}`;
 }
 
+function hoursFromTimes(start: string, end: string): number {
+  const [sh] = start.split(":").map(Number);
+  const [eh] = end.split(":").map(Number);
+  return Number.isNaN(sh) || Number.isNaN(eh) ? 0 : Math.max(0, eh - sh);
+}
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const PAGE_SIZE = 10;
+
+function PaginationControls(props: {
+  currentPage: number;
+  totalPages: number;
+  onPageChange: (page: number) => void;
+}) {
+  const { currentPage, totalPages, onPageChange } = props;
+
+  if (totalPages <= 1) {
+    return null;
+  }
+
+  return (
+    <div className="mt-3 flex items-center justify-between gap-2 px-1">
+      <p className="text-xs text-gray-500">
+        Page {currentPage} of {totalPages}
+      </p>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => onPageChange(currentPage - 1)}
+          disabled={currentPage <= 1}
+          className="inline-flex items-center justify-center rounded-lg border border-gray-700 bg-[#1F2937] px-3 py-1.5 text-xs font-semibold text-gray-300 transition hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          Previous
+        </button>
+        <button
+          type="button"
+          onClick={() => onPageChange(currentPage + 1)}
+          disabled={currentPage >= totalPages}
+          className="inline-flex items-center justify-center rounded-lg border border-gray-700 bg-[#1F2937] px-3 py-1.5 text-xs font-semibold text-gray-300 transition hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          Next
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function toYearMonth(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value.slice(0, 7);
+  }
+
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     ...init,
@@ -431,7 +506,7 @@ function parsePaymentReference(paymentReference?: string | null): Array<{ label:
 
 export default function AdminPage() {
   const [activeTab, setActiveTab] = useState<
-    "bookings" | "customers" | "courts" | "users" | "abuse"
+    "bookings" | "customers" | "courts" | "users" | "abuse" | "revenue"
   >("bookings");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [currentUser, setCurrentUser] = useState<AdminUser | null>(null);
@@ -443,6 +518,8 @@ export default function AdminPage() {
   const [courts, setCourts] = useState<Court[]>([]);
   const [users, setUsers] = useState<StaffUser[]>([]);
   const [abuseLogs, setAbuseLogs] = useState<AbuseLog[]>([]);
+  const [blockedSessions, setBlockedSessions] = useState<BlockedSessionRevenueRecord[]>([]);
+  const [revenueFilterMonth, setRevenueFilterMonth] = useState<string>(() => new Date().toISOString().slice(0, 7));
 
   const [loginForm, setLoginForm] = useState({ username: "", password: "" });
 
@@ -482,6 +559,15 @@ export default function AdminPage() {
   const [selectedUser, setSelectedUser] = useState<StaffUser | null>(null);
   const [selectedCourt, setSelectedCourt] = useState<Court | null>(null);
   const [selectedAbuseLog, setSelectedAbuseLog] = useState<AbuseLog | null>(null);
+  const [tablePages, setTablePages] = useState<Record<AdminTablePageKey, number>>({
+    customers: 1,
+    bookings: 1,
+    users: 1,
+    courts: 1,
+    abuse: 1,
+    revenue: 1,
+    revenueBookings: 1,
+  });
 
   const customerOptions = useMemo(
     () => customers.map((c) => ({ value: c._id, label: `${c.name} (${c.contactNumber})` })),
@@ -496,16 +582,288 @@ export default function AdminPage() {
     [courts]
   );
 
+  const courtNameMap = useMemo(
+    () => Object.fromEntries(courts.map((court) => [court._id, court.name])),
+    [courts]
+  );
+
+  function paginateRows<RowType>(rows: RowType[], key: AdminTablePageKey) {
+    const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+    const currentPage = Math.min(tablePages[key], totalPages);
+    const startIndex = (currentPage - 1) * PAGE_SIZE;
+
+    return {
+      currentPage,
+      totalPages,
+      rows: rows.slice(startIndex, startIndex + PAGE_SIZE),
+    };
+  }
+
+  function handleTablePageChange(key: AdminTablePageKey, nextPage: number): void {
+    setTablePages((prev) => ({ ...prev, [key]: Math.max(1, nextPage) }));
+  }
+
+  const paidStatuses = useMemo(() => new Set(["PAID", "COMPLETE"]), []);
+
+  const paidBookingsThisMonth = useMemo(
+    () => bookings.filter((booking) => paidStatuses.has(booking.status) && booking.bookingDate.startsWith(revenueFilterMonth)),
+    [bookings, paidStatuses, revenueFilterMonth]
+  );
+
+  const calcBookingAmount = useMemo(
+    () =>
+      (booking: Booking): number => {
+        if (typeof booking.chargedAmount === "number") {
+          return booking.chargedAmount;
+        }
+
+        const courtPrice = courts.find((court) => court._id === booking.courtId)?.price ?? 0;
+        return courtPrice * hoursFromTimes(booking.startTime, booking.endTime);
+      },
+    [courts]
+  );
+
+  const bookingRevenueTotal = useMemo(
+    () => paidBookingsThisMonth.reduce((sum, booking) => sum + calcBookingAmount(booking), 0),
+    [paidBookingsThisMonth, calcBookingAmount]
+  );
+
+  const bookingCashTotal = useMemo(
+    () =>
+      paidBookingsThisMonth
+        .filter((booking) => booking.paymentMethod === "cash" || !booking.paymentMethod)
+        .reduce((sum, booking) => sum + calcBookingAmount(booking), 0),
+    [paidBookingsThisMonth, calcBookingAmount]
+  );
+
+  const bookingOnlineTotal = useMemo(
+    () =>
+      paidBookingsThisMonth
+        .filter((booking) => booking.paymentMethod === "online")
+        .reduce((sum, booking) => sum + calcBookingAmount(booking), 0),
+    [paidBookingsThisMonth, calcBookingAmount]
+  );
+
+  const completedBlockedSessions = useMemo(
+    () =>
+      blockedSessions.filter(
+        (session) =>
+          !!session.sessionEndedAt &&
+          typeof session.chargedAmount === "number" &&
+          toYearMonth(session.sessionEndedAt as string) === revenueFilterMonth
+      ),
+    [blockedSessions, revenueFilterMonth]
+  );
+
+  const blockedRevenueTotal = useMemo(
+    () => completedBlockedSessions.reduce((sum, session) => sum + (session.chargedAmount ?? 0), 0),
+    [completedBlockedSessions]
+  );
+
+  const combinedRevenueTotal = bookingRevenueTotal + blockedRevenueTotal;
+
+  const availableRevenueMonths = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          blockedSessions
+            .filter((session) => !!session.sessionEndedAt)
+            .map((session) => toYearMonth(session.sessionEndedAt as string))
+            .concat(bookings.map((booking) => booking.bookingDate.slice(0, 7)))
+        )
+      )
+        .sort()
+        .reverse(),
+    [blockedSessions, bookings]
+  );
+
+  const [revenueYear, revenueMonthNum] = revenueFilterMonth.split("-");
+  const revenueMonthLabel = `${MONTHS[Math.max(0, (parseInt(revenueMonthNum, 10) || 1) - 1)]} ${revenueYear}`;
+
+  const revenueTrend = useMemo(() => {
+    const months = Array.from({ length: 6 }, (_, index) => {
+      const date = new Date();
+      date.setMonth(date.getMonth() - index);
+      return date.toISOString().slice(0, 7);
+    }).reverse();
+
+    return months.map((month) => {
+      const bookingTotal = bookings
+        .filter((booking) => paidStatuses.has(booking.status) && booking.bookingDate.startsWith(month))
+        .reduce((sum, booking) => sum + calcBookingAmount(booking), 0);
+
+      const blockedTotal = blockedSessions
+        .filter(
+          (session) =>
+            !!session.sessionEndedAt &&
+            typeof session.chargedAmount === "number" &&
+            toYearMonth(session.sessionEndedAt as string) === month
+        )
+        .reduce((sum, session) => sum + (session.chargedAmount ?? 0), 0);
+
+      return {
+        month,
+        label: MONTHS[(parseInt(month.slice(5, 7), 10) || 1) - 1],
+        bookingTotal,
+        blockedTotal,
+        combinedTotal: bookingTotal + blockedTotal,
+      };
+    });
+  }, [blockedSessions, bookings, calcBookingAmount, paidStatuses]);
+
+  const revenueTrendMax = useMemo(
+    () => Math.max(...revenueTrend.map((item) => item.combinedTotal), 1),
+    [revenueTrend]
+  );
+
+  const paginatedCustomers = paginateRows(customers, "customers");
+  const paginatedBookings = paginateRows(bookings, "bookings");
+  const paginatedUsers = paginateRows(users, "users");
+  const paginatedCourts = paginateRows(courts, "courts");
+  const paginatedAbuseLogs = paginateRows(abuseLogs, "abuse");
+  const combinedRevenueRows = [
+    ...completedBlockedSessions
+      .slice()
+      .sort((a, b) => new Date(b.sessionEndedAt as string).getTime() - new Date(a.sessionEndedAt as string).getTime())
+      .map((session) => ({ type: "blocked" as const, session })),
+    ...paidBookingsThisMonth
+      .slice()
+      .sort((a, b) => b.bookingDate.localeCompare(a.bookingDate))
+      .map((booking) => ({ type: "booking" as const, booking })),
+  ];
+  const paginatedRevenueRows = paginateRows(combinedRevenueRows, "revenue");
+  const paginatedRevenueBookings = paginateRows(paidBookingsThisMonth, "revenueBookings");
+
+  function exportBlockedRevenueCsv(): void {
+    if (completedBlockedSessions.length === 0 && paidBookingsThisMonth.length === 0) {
+      return;
+    }
+
+    const escapeCsv = (value: string | number): string => {
+      const text = String(value);
+      return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+    };
+
+    const rows = [
+      ["Type", "Court", "Date", "In", "Out", "Duration Hours", "Rate", "Amount"],
+      ...completedBlockedSessions
+        .slice()
+        .sort((a, b) => new Date(b.sessionEndedAt as string).getTime() - new Date(a.sessionEndedAt as string).getTime())
+        .map((session) => [
+          "BLOCKED_SESSION",
+          courtNameMap[session.courtId] ?? session.courtId,
+          session.bookingDate,
+          new Date(session.sessionStartedAt as string).toLocaleString(),
+          new Date(session.sessionEndedAt as string).toLocaleString(),
+          (session.actualDurationHours ?? 0).toFixed(2),
+          (session.hourlyRateSnapshot ?? 0).toFixed(2),
+          (session.chargedAmount ?? 0).toFixed(2),
+        ]),
+      ...paidBookingsThisMonth
+        .slice()
+        .sort((a, b) => b.bookingDate.localeCompare(a.bookingDate))
+        .map((booking) => [
+          "BOOKING",
+          courtNameMap[booking.courtId] ?? booking.courtId,
+          booking.bookingDate,
+          `${booking.startTime}`,
+          `${booking.endTime}`,
+          hoursFromTimes(booking.startTime, booking.endTime).toFixed(2),
+          "-",
+          calcBookingAmount(booking).toFixed(2),
+        ]),
+      ["TOTAL", "", "", "", "", "", "", combinedRevenueTotal.toFixed(2)],
+    ];
+
+    const csv = rows.map((row) => row.map(escapeCsv).join(",")).join("\r\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `admin-combined-revenue-${revenueFilterMonth}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
+
+  async function exportBlockedRevenuePdf(): Promise<void> {
+    const doc = new jsPDF();
+    const money = (value: number) => `PHP ${value.toLocaleString("en-PH", { minimumFractionDigits: 2 })}`;
+
+    doc.setFontSize(16);
+    doc.text("Admin Combined Revenue", 14, 18);
+    doc.setFontSize(10);
+    doc.text(`Period: ${revenueMonthLabel}`, 14, 24);
+    doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 29);
+    doc.text(`Generated by: ${currentUser?.name || "Admin"}`, 14, 34);
+
+    autoTable(doc, {
+      startY: 40,
+      head: [["Metric", "Value"]],
+      body: [
+        ["Booking Revenue", money(bookingRevenueTotal)],
+        ["Blocked Sessions Revenue", money(blockedRevenueTotal)],
+        ["Combined Revenue", money(combinedRevenueTotal)],
+        ["Booking Cash", money(bookingCashTotal)],
+        ["Booking Online", money(bookingOnlineTotal)],
+        ["Paid Bookings", String(paidBookingsThisMonth.length)],
+        ["Closed Sessions", String(completedBlockedSessions.length)],
+      ],
+      styles: { fontSize: 9 },
+      headStyles: { fillColor: [8, 145, 178] },
+    });
+
+    const tableY = (doc as { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? 60;
+    autoTable(doc, {
+      startY: tableY + 8,
+      head: [["Type", "Court", "Date", "In", "Out", "Hours", "Rate", "Amount"]],
+      body: [
+        ...completedBlockedSessions
+          .slice()
+          .sort((a, b) => new Date(b.sessionEndedAt as string).getTime() - new Date(a.sessionEndedAt as string).getTime())
+          .map((session) => [
+            "Blocked",
+            courtNameMap[session.courtId] ?? session.courtId,
+            session.bookingDate,
+            new Date(session.sessionStartedAt as string).toLocaleString(),
+            new Date(session.sessionEndedAt as string).toLocaleString(),
+            (session.actualDurationHours ?? 0).toFixed(2),
+            money(session.hourlyRateSnapshot ?? 0),
+            money(session.chargedAmount ?? 0),
+          ]),
+        ...paidBookingsThisMonth
+          .slice()
+          .sort((a, b) => b.bookingDate.localeCompare(a.bookingDate))
+          .map((booking) => [
+            "Booking",
+            courtNameMap[booking.courtId] ?? booking.courtId,
+            booking.bookingDate,
+            booking.startTime,
+            booking.endTime,
+            hoursFromTimes(booking.startTime, booking.endTime).toFixed(2),
+            "-",
+            money(calcBookingAmount(booking)),
+          ]),
+      ],
+      styles: { fontSize: 8 },
+      headStyles: { fillColor: [6, 95, 110] },
+    });
+
+    doc.save(`admin-combined-revenue-${revenueFilterMonth}.pdf`);
+  }
+
   async function loadAll(): Promise<void> {
     setLoading(true);
     setError(null);
     try {
-      const [bookingsData, customersData, courtsData, usersData, abuseData] = await Promise.all([
+      const [bookingsData, customersData, courtsData, usersData, abuseData, blockedData] = await Promise.all([
         api<Booking[]>("/api/admin/bookings"),
         api<Customer[]>("/api/admin/customers"),
         api<Court[]>("/api/admin/courts"),
         api<StaffUser[]>("/api/admin/users"),
         api<AbuseLog[]>("/api/admin/abuse-logs"),
+        api<BlockedSessionRevenueRecord[]>('/api/admin/blocked-slots'),
       ]);
 
       setBookings(bookingsData);
@@ -517,6 +875,7 @@ export default function AdminPage() {
       );
       setUsers(usersData);
       setAbuseLogs(abuseData);
+      setBlockedSessions(blockedData);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load data");
     } finally {
@@ -621,6 +980,7 @@ export default function AdminPage() {
     setCourts([]);
     setUsers([]);
     setAbuseLogs([]);
+    setBlockedSessions([]);
   }
 
   function openEditModal(state: EditModalState): void {
@@ -682,6 +1042,7 @@ export default function AdminPage() {
       setCourts([]);
       setUsers([]);
       setAbuseLogs([]);
+      setBlockedSessions([]);
     }
 
     window.location.replace("/");
@@ -928,6 +1289,13 @@ export default function AdminPage() {
           ⚠️ Abuse Logs
           <span className={styles.navBadge}>{abuseLogs.length}</span>
         </button>
+        <button
+          className={`${styles.navButton} ${activeTab === "revenue" ? styles.navButtonActive : ""}`}
+          onClick={() => { setActiveTab("revenue"); setSidebarOpen(false); }}
+        >
+          💰 Revenue
+          <span className={styles.navBadge}>{completedBlockedSessions.length}</span>
+        </button>
 
         {/* Mobile-only action buttons */}
         <div className="mt-auto pt-4 flex flex-col gap-2 lg:hidden">
@@ -1081,7 +1449,7 @@ export default function AdminPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {customers.map((customer) => (
+                    {paginatedCustomers.rows.map((customer) => (
                       <tr key={customer._id}>
                         <td>
                           <button
@@ -1099,6 +1467,11 @@ export default function AdminPage() {
                   </tbody>
                 </table>
               </div>
+              <PaginationControls
+                currentPage={paginatedCustomers.currentPage}
+                totalPages={paginatedCustomers.totalPages}
+                onPageChange={(page) => handleTablePageChange("customers", page)}
+              />
               </div>
             </section>
           )}
@@ -1213,7 +1586,7 @@ export default function AdminPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {bookings.map((booking) => (
+                    {paginatedBookings.rows.map((booking) => (
                       <tr key={booking._id}>
                         <td>
                           <button
@@ -1236,6 +1609,11 @@ export default function AdminPage() {
                   </tbody>
                 </table>
               </div>
+              <PaginationControls
+                currentPage={paginatedBookings.currentPage}
+                totalPages={paginatedBookings.totalPages}
+                onPageChange={(page) => handleTablePageChange("bookings", page)}
+              />
               </div>
             </section>
           )}
@@ -1323,7 +1701,7 @@ export default function AdminPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {users.map((user) => (
+                    {paginatedUsers.rows.map((user) => (
                       <tr key={user._id}>
                         <td>
                           <button
@@ -1342,6 +1720,11 @@ export default function AdminPage() {
                   </tbody>
                 </table>
               </div>
+              <PaginationControls
+                currentPage={paginatedUsers.currentPage}
+                totalPages={paginatedUsers.totalPages}
+                onPageChange={(page) => handleTablePageChange("users", page)}
+              />
               </div>
             </section>
           )}
@@ -1435,7 +1818,7 @@ export default function AdminPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {courts.map((court) => (
+                    {paginatedCourts.rows.map((court) => (
                       <tr key={court._id}>
                         <td>
                           <button
@@ -1458,6 +1841,11 @@ export default function AdminPage() {
                   </tbody>
                 </table>
               </div>
+              <PaginationControls
+                currentPage={paginatedCourts.currentPage}
+                totalPages={paginatedCourts.totalPages}
+                onPageChange={(page) => handleTablePageChange("courts", page)}
+              />
               </div>
             </section>
           )}
@@ -1482,7 +1870,7 @@ export default function AdminPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {abuseLogs.map((log) => (
+                    {paginatedAbuseLogs.rows.map((log) => (
                       <tr key={log._id}>
                         <td>
                           <button
@@ -1503,6 +1891,214 @@ export default function AdminPage() {
                   </tbody>
                 </table>
               </div>
+              <PaginationControls
+                currentPage={paginatedAbuseLogs.currentPage}
+                totalPages={paginatedAbuseLogs.totalPages}
+                onPageChange={(page) => handleTablePageChange("abuse", page)}
+              />
+              </div>
+            </section>
+          )}
+
+          {activeTab === "revenue" && (
+            <section className={styles.panel}>
+              <div className={styles.panelHeader}>
+                <h2 className={styles.sectionTitle}>
+                  Revenue Overview
+                  <span className={styles.sectionCount}>{completedBlockedSessions.length}</span>
+                </h2>
+              </div>
+              <div className={styles.panelBody}>
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-cyan-700/40 bg-cyan-950/15 px-4 py-3">
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs text-cyan-200">Month:</label>
+                    <select
+                      value={revenueFilterMonth}
+                      onChange={(e) => setRevenueFilterMonth(e.target.value)}
+                      className={styles.select}
+                    >
+                      {(availableRevenueMonths.length ? availableRevenueMonths : [revenueFilterMonth]).map((m) => {
+                        const [y, mo] = m.split("-");
+                        return (
+                          <option key={m} value={m}>
+                            {MONTHS[(parseInt(mo, 10) || 1) - 1]} {y}
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={exportBlockedRevenueCsv}
+                      disabled={completedBlockedSessions.length === 0}
+                      className={`${styles.btn} ${styles.btnInfo}`}
+                    >
+                      Export CSV
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void exportBlockedRevenuePdf()}
+                      disabled={completedBlockedSessions.length === 0}
+                      className={`${styles.btn} ${styles.btnInfo}`}
+                    >
+                      Export PDF
+                    </button>
+                  </div>
+                </div>
+
+                <div className="mb-4 rounded-xl border border-cyan-700/40 bg-cyan-950/15 px-4 py-3">
+                  <p className="text-xs uppercase tracking-wide text-cyan-300">Combined Revenue</p>
+                  <p className="mt-1 text-2xl font-bold text-cyan-200">
+                    ₱{combinedRevenueTotal.toLocaleString("en-PH", { minimumFractionDigits: 2 })}
+                  </p>
+                  <p className="text-xs text-cyan-100/70">{paidBookingsThisMonth.length} paid booking{paidBookingsThisMonth.length !== 1 ? "s" : ""} + {completedBlockedSessions.length} closed session{completedBlockedSessions.length !== 1 ? "s" : ""} · {revenueMonthLabel}</p>
+                  <div className="mt-2 grid grid-cols-1 gap-2 text-xs text-cyan-100/80 sm:grid-cols-3">
+                    <div>Booking: ₱{bookingRevenueTotal.toLocaleString("en-PH", { minimumFractionDigits: 2 })}</div>
+                    <div>Blocked: ₱{blockedRevenueTotal.toLocaleString("en-PH", { minimumFractionDigits: 2 })}</div>
+                    <div>Cash/Online: ₱{bookingCashTotal.toLocaleString("en-PH", { minimumFractionDigits: 2 })} / ₱{bookingOnlineTotal.toLocaleString("en-PH", { minimumFractionDigits: 2 })}</div>
+                  </div>
+                </div>
+
+                <div className="mb-4 rounded-xl border border-cyan-700/40 bg-[#0B0F1A] px-4 py-4">
+                  <div className="mb-3 flex items-center justify-between gap-2">
+                    <p className="text-xs uppercase tracking-wide text-cyan-300">6-Month Contribution</p>
+                    <div className="flex items-center gap-3 text-[11px] text-gray-400">
+                      <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-emerald-500" />Booking</span>
+                      <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-cyan-500" />Blocked</span>
+                    </div>
+                  </div>
+                  <div className="flex h-44 items-end gap-3">
+                    {revenueTrend.map((item) => {
+                      const bookingHeight = (item.bookingTotal / revenueTrendMax) * 100;
+                      const blockedHeight = (item.blockedTotal / revenueTrendMax) * 100;
+                      const isCurrent = item.month === revenueFilterMonth;
+
+                      return (
+                        <div key={item.month} className="flex min-w-0 flex-1 flex-col items-center gap-1">
+                          <span className="text-[10px] text-gray-500">
+                            ₱{item.combinedTotal >= 1000 ? `${(item.combinedTotal / 1000).toFixed(1)}k` : item.combinedTotal.toFixed(0)}
+                          </span>
+                          <div className={`flex w-full flex-col justify-end overflow-hidden rounded-t-md border ${isCurrent ? "border-cyan-500/60" : "border-gray-800"}`} style={{ height: "120px" }}>
+                            <div
+                              className="w-full bg-cyan-500 transition-[height] duration-300"
+                              style={{ height: `${Math.max(item.blockedTotal > 0 ? 4 : 0, blockedHeight)}%` }}
+                            />
+                            <div
+                              className="w-full bg-emerald-500 transition-[height] duration-300"
+                              style={{ height: `${Math.max(item.bookingTotal > 0 ? 4 : 0, bookingHeight)}%` }}
+                            />
+                          </div>
+                          <span className={`text-[10px] ${isCurrent ? "font-semibold text-cyan-300" : "text-gray-500"}`}>{item.label}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className={styles.tableWrap}>
+                  <table className={styles.table}>
+                    <thead>
+                      <tr>
+                        <th>Type</th>
+                        <th>Court</th>
+                        <th>Date</th>
+                        <th>In</th>
+                        <th>Out</th>
+                        <th>Hours</th>
+                        <th>Rate</th>
+                        <th>Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {completedBlockedSessions.length === 0 && paidBookingsThisMonth.length === 0 ? (
+                        <tr>
+                          <td colSpan={8} className="text-center italic text-gray-500">
+                            No revenue records for this month.
+                          </td>
+                        </tr>
+                      ) : (
+                        paginatedRevenueRows.rows.map((row) => (
+                          row.type === "blocked" ? (
+                              <tr key={`blocked-${session._id}`}>
+                                <td><span className="rounded bg-cyan-900/40 px-2 py-0.5 text-[11px] text-cyan-200">Blocked</span></td>
+                                <td>{courtNameMap[row.session.courtId] ?? row.session.courtId}</td>
+                                <td>{row.session.bookingDate}</td>
+                                <td>{new Date(row.session.sessionStartedAt as string).toLocaleString()}</td>
+                                <td>{new Date(row.session.sessionEndedAt as string).toLocaleString()}</td>
+                                <td>{(row.session.actualDurationHours ?? 0).toFixed(2)}</td>
+                                <td>₱{(row.session.hourlyRateSnapshot ?? 0).toLocaleString("en-PH", { minimumFractionDigits: 2 })}</td>
+                                <td className="font-semibold text-cyan-300">
+                                  ₱{(row.session.chargedAmount ?? 0).toLocaleString("en-PH", { minimumFractionDigits: 2 })}
+                                </td>
+                              </tr>
+                          ) : (
+                              <tr key={`booking-${row.booking._id}`}>
+                                <td><span className="rounded bg-emerald-900/30 px-2 py-0.5 text-[11px] text-emerald-300">Booking</span></td>
+                                <td>{courtNameMap[row.booking.courtId] ?? row.booking.courtId}</td>
+                                <td>{row.booking.bookingDate}</td>
+                                <td>{row.booking.startTime}</td>
+                                <td>{row.booking.endTime}</td>
+                                <td>{hoursFromTimes(row.booking.startTime, row.booking.endTime).toFixed(2)}</td>
+                                <td>-</td>
+                                <td className="font-semibold text-emerald-300">
+                                  ₱{calcBookingAmount(row.booking).toLocaleString("en-PH", { minimumFractionDigits: 2 })}
+                                </td>
+                              </tr>
+                          )
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+                <PaginationControls
+                  currentPage={paginatedRevenueRows.currentPage}
+                  totalPages={paginatedRevenueRows.totalPages}
+                  onPageChange={(page) => handleTablePageChange("revenue", page)}
+                />
+
+                <div className="mt-4 rounded-xl border border-gray-700 bg-[#0B0F1A] p-4">
+                  <p className="mb-2 text-xs uppercase tracking-wide text-gray-400">Paid Bookings (Quick View)</p>
+                  <div className={styles.tableWrap}>
+                    <table className={styles.table}>
+                      <thead>
+                        <tr>
+                          <th>Customer</th>
+                          <th>Court</th>
+                          <th>Date</th>
+                          <th>Time</th>
+                          <th>Method</th>
+                          <th>Amount</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {paidBookingsThisMonth.length === 0 ? (
+                          <tr>
+                            <td colSpan={6} className="text-center italic text-gray-500">
+                              No paid bookings for this month.
+                            </td>
+                          </tr>
+                        ) : (
+                          paginatedRevenueBookings.rows.map((booking) => (
+                            <tr key={booking._id}>
+                              <td>{booking.customer?.name ?? "Unknown"}</td>
+                              <td>{courtNameMap[booking.courtId] ?? booking.courtId}</td>
+                              <td>{booking.bookingDate}</td>
+                              <td>{booking.startTime}-{booking.endTime}</td>
+                              <td>{booking.paymentMethod === "online" ? "Online" : "Cash"}</td>
+                              <td className="font-semibold text-emerald-300">₱{calcBookingAmount(booking).toLocaleString("en-PH", { minimumFractionDigits: 2 })}</td>
+                            </tr>
+                          ))
+                      )}
+                      </tbody>
+                    </table>
+                  </div>
+                  <PaginationControls
+                    currentPage={paginatedRevenueBookings.currentPage}
+                    totalPages={paginatedRevenueBookings.totalPages}
+                    onPageChange={(page) => handleTablePageChange("revenueBookings", page)}
+                  />
+                </div>
               </div>
             </section>
           )}

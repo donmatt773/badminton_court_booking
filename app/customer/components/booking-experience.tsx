@@ -7,6 +7,7 @@ import Link from "next/link";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { getPusherClient } from "@/lib/client/pusher-client";
 import { REALTIME_CHANNELS, REALTIME_EVENTS } from "@/lib/shared/realtime-events";
+import { blockedSlotRangesOverlap } from "@/lib/shared/blocked-slot-time";
 
 type Court = {
   id: string;
@@ -105,7 +106,7 @@ function currentTimeHHMM(): string {
 }
 
 function rangesOverlap(startA: string, endA: string, startB: string, endB: string): boolean {
-  return startA < endB && endA > startB;
+  return blockedSlotRangesOverlap(startA, endA, startB, endB);
 }
 
 function toMinutes(hhmm: string): number {

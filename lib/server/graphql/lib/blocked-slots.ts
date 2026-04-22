@@ -1,7 +1,8 @@
 import { BlockedSlotModel } from "@/lib/server/graphql/models/BlockedSlot";
+import { blockedSlotRangesOverlap } from "@/lib/shared/blocked-slot-time";
 
 export function rangesOverlap(startA: string, endA: string, startB: string, endB: string): boolean {
-  return startA < endB && endA > startB;
+  return blockedSlotRangesOverlap(startA, endA, startB, endB);
 }
 
 export async function findOverlappingBlockedSlot(input: {
@@ -10,10 +11,12 @@ export async function findOverlappingBlockedSlot(input: {
   startTime: string;
   endTime: string;
 }) {
-  return BlockedSlotModel.findOne({
+  const blockedSlots = await BlockedSlotModel.find({
     courtId: input.courtId,
     bookingDate: input.bookingDate,
-    startTime: { $lt: input.endTime },
-    endTime: { $gt: input.startTime },
   });
+
+  return blockedSlots.find((blockedSlot) =>
+    blockedSlotRangesOverlap(input.startTime, input.endTime, blockedSlot.startTime, blockedSlot.endTime)
+  ) ?? null;
 }
