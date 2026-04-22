@@ -1,8 +1,7 @@
 "use client";
 import React, { useEffect, useRef, useState, FC } from 'react';
 import { useRouter } from 'next/navigation';
-import jsPDF from 'jspdf';
-import autoTable from 'jspdf-autotable';
+
 
 import { BookingTable, type StatusTab } from './components/booking-table';
 
@@ -188,6 +187,10 @@ const RevenueViewer: FC<{ staffName: string }> = ({ staffName }) => {
   }
 
   async function exportRevenuePdf(): Promise<void> {
+    const [{ default: jsPDF }, { default: autoTable }] = await Promise.all([
+      import('jspdf'),
+      import('jspdf-autotable'),
+    ]);
     const doc = new jsPDF();
     const money = (value: number) => `PHP ${value.toLocaleString("en-PH", { minimumFractionDigits: 2 })}`;
 
@@ -565,7 +568,7 @@ const ReceptionistDashboard: FC = () => {
       });
 
       if (!response.ok) {
-        router.replace('/Login');
+        router.replace('/login');
         return;
       }
 
@@ -573,7 +576,7 @@ const ReceptionistDashboard: FC = () => {
       const user = body?.data;
 
       if (!user) {
-        router.replace('/Login');
+        router.replace('/login');
         return;
       }
 
@@ -584,7 +587,7 @@ const ReceptionistDashboard: FC = () => {
 
       setSessionUser(user);
     } catch {
-      router.replace('/Login');
+      router.replace('/login');
       return;
     } finally {
       setIsCheckingSession(false);
@@ -605,7 +608,7 @@ const ReceptionistDashboard: FC = () => {
     try {
       await fetch('/api/admin/logout', { method: 'POST', credentials: 'include' });
     } finally {
-      router.replace('/Login');
+      router.replace('/login');
     }
   }
 
