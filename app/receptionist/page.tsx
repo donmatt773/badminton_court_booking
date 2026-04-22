@@ -375,6 +375,10 @@ const RevenueViewer: FC<{ staffName: string }> = ({ staffName }) => {
   }
 
   async function exportBlockedSessionsRevenuePdf(): Promise<void> {
+    const [{ default: jsPDF }, { default: autoTable }] = await Promise.all([
+      import('jspdf'),
+      import('jspdf-autotable'),
+    ]);
     const doc = new jsPDF();
     const money = (value: number) => `PHP ${value.toLocaleString("en-PH", { minimumFractionDigits: 2 })}`;
 

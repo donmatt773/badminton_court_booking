@@ -8,6 +8,9 @@ import { getFriendlyErrorMessage } from "@/lib/server/friendly-error";
 import { triggerBlockedSlotsUpdated } from "@/lib/server/pusher-server";
 import { isValidBlockedSlotTimeRange } from "@/lib/shared/blocked-slot-time";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 const createSchema = z
   .object({
     courtId: z.string().min(1).optional(),
@@ -16,6 +19,8 @@ const createSchema = z
     bookingDates: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).max(366).optional(),
     startTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
     endTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+    groupName: z.string().trim().min(2).max(120),
+    groupRepresentative: z.string().trim().min(2).max(120),
     reason: z.string().trim().max(200).optional(),
   })
   .superRefine((value, ctx) => {
@@ -74,7 +79,7 @@ export async function GET(request: Request): Promise<Response> {
     }
 
     return Response.json(
-      { error: { message: getFriendlyErrorMessage(error, "Failed to fetch blocked slots") } },
+      { error: { message: getFriendlyErrorMessage(error, "Failed to fetch blocked records") } },
       { status: 500 }
     );
   }
@@ -104,45 +109,49 @@ export async function POST(request: Request): Promise<Response> {
       );
     }
 
+    const firstBookingDate = bookingDates[0];
+    const lastBookingDate = bookingDates[bookingDates.length - 1];
+
     const created: unknown[] = [];
     const skipped: Array<{ courtId: string; bookingDate: string; reason: string }> = [];
 
-    for (const bookingDate of bookingDates) {
-      for (const courtId of courtIds) {
-        const overlap = await findOverlappingBlockedSlot({
+    for (const courtId of courtIds) {
+      const overlap = await findOverlappingBlockedSlot({
+        courtId,
+        bookingDate: firstBookingDate,
+        startTime: body.startTime,
+        endTime: body.endTime,
+      });
+
+      if (overlap) {
+        skipped.push({
           courtId,
-          bookingDate,
-          startTime: body.startTime,
-          endTime: body.endTime,
+          bookingDate: firstBookingDate,
+          reason: "Overlaps an existing blocked range",
         });
-
-        if (overlap) {
-          skipped.push({
-            courtId,
-            bookingDate,
-            reason: "Overlaps an existing blocked range",
-          });
-          continue;
-        }
-
-        const blockedSlot = await BlockedSlotModel.create({
-          courtId,
-          bookingDate,
-          startTime: body.startTime,
-          endTime: body.endTime,
-          reason: body.reason?.trim() || null,
-          createdByUserId: session.userId,
-        });
-
-        created.push(blockedSlot);
+        continue;
       }
+
+      const blockedSlot = await BlockedSlotModel.create({
+        courtId,
+        bookingDate: firstBookingDate,
+        recurrenceUntilDate: lastBookingDate > firstBookingDate ? lastBookingDate : null,
+        startTime: body.startTime,
+        endTime: body.endTime,
+        groupName: body.groupName.trim(),
+        groupRepresentative: body.groupRepresentative.trim(),
+        reason: body.reason?.trim() || null,
+        createdByUserId: session.userId,
+      });
+
+      created.push(blockedSlot);
     }
 
     if (created.length === 0) {
       return Response.json(
         {
           error: {
-            message: "No blocked slots were created because all selected courts had overlapping blocked ranges",
+            message: "No blocked records were created because all selected courts had overlapping blocked ranges",
           },
           data: {
             created,

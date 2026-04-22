@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
+import { BlockedSlotManager } from "@/app/receptionist/components/blocked-slot-manager";
 
 type AdminUser = {
   id: string;
@@ -72,7 +73,7 @@ type BlockedSessionRevenueRecord = {
   chargedAmount?: number | null;
 };
 
-type AdminTablePageKey = "customers" | "bookings" | "users" | "courts" | "abuse" | "revenue" | "revenueBookings";
+type AdminTablePageKey = "customers" | "bookings" | "users" | "courts" | "abuse" | "revenue" | "revenueBookings" | "blocked";
 
 type EditModalState =
   | {
@@ -506,7 +507,7 @@ function parsePaymentReference(paymentReference?: string | null): Array<{ label:
 
 export default function AdminPage() {
   const [activeTab, setActiveTab] = useState<
-    "bookings" | "customers" | "courts" | "users" | "abuse" | "revenue"
+    "bookings" | "customers" | "courts" | "users" | "abuse" | "revenue" | "blocked"
   >("bookings");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [currentUser, setCurrentUser] = useState<AdminUser | null>(null);
@@ -1295,6 +1296,12 @@ export default function AdminPage() {
         >
           💰 Revenue
           <span className={styles.navBadge}>{completedBlockedSessions.length}</span>
+        </button>
+        <button
+          className={`${styles.navButton} ${activeTab === "blocked" ? styles.navButtonActive : ""}`}
+          onClick={() => { setActiveTab("blocked"); setSidebarOpen(false); }}
+        >
+          🚫 Blocked Slots
         </button>
 
         {/* Mobile-only action buttons */}
@@ -2099,6 +2106,17 @@ export default function AdminPage() {
                     onPageChange={(page) => handleTablePageChange("revenueBookings", page)}
                   />
                 </div>
+              </div>
+            </section>
+          )}
+
+          {activeTab === "blocked" && (
+            <section className={styles.panel}>
+              <div className={styles.panelHeader}>
+                <h2 className={styles.sectionTitle}>🚫 Blocked Slots</h2>
+              </div>
+              <div className={styles.panelBody}>
+                <BlockedSlotManager />
               </div>
             </section>
           )}

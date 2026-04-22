@@ -29,6 +29,23 @@ const blockedSlotSchema = new Schema(
       maxlength: 200,
       default: null,
     },
+    groupName: {
+      type: String,
+      trim: true,
+      maxlength: 120,
+      default: null,
+    },
+    groupRepresentative: {
+      type: String,
+      trim: true,
+      maxlength: 120,
+      default: null,
+    },
+    recurrenceUntilDate: {
+      type: String,
+      trim: true,
+      default: null,
+    },
     sessionStartedAt: {
       type: Date,
       default: null,

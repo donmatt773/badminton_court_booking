@@ -13,7 +13,15 @@ export async function findOverlappingBlockedSlot(input: {
 }) {
   const blockedSlots = await BlockedSlotModel.find({
     courtId: input.courtId,
-    bookingDate: input.bookingDate,
+    $or: [
+      { bookingDate: input.bookingDate },
+      {
+        recurrenceUntilDate: { $ne: null },
+        bookingDate: { $lte: input.bookingDate },
+        recurrenceUntilDate: { $gte: input.bookingDate },
+        sessionEndedAt: null,
+      },
+    ],
   });
 
   return blockedSlots.find((blockedSlot) =>
