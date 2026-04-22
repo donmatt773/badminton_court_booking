@@ -55,7 +55,13 @@ export const WalkInBookingModal: FC<WalkInBookingModalProps> = ({ onClose, onCre
   const [newEmail, setNewEmail] = useState("");
 
   // Booking fields
-  const [courtId, setCourtId] = useState("");
+  const [selectedCourtIds, setSelectedCourtIds] = useState<string[]>([]);
+
+  function toggleCourt(id: string) {
+    setSelectedCourtIds((prev) =>
+      prev.includes(id) ? prev.filter((c) => c !== id) : [...prev, id]
+    );
+  }
   const [bookingDate, setBookingDate] = useState("");
   const [startTime, setStartTime] = useState("");
   const [endTime, setEndTime] = useState("");
@@ -102,29 +108,31 @@ export const WalkInBookingModal: FC<WalkInBookingModalProps> = ({ onClose, onCre
   const nowTime = currentTimeHHMM();
 
   useEffect(() => {
-    if (!courtId || !bookingDate) {
+    if (selectedCourtIds.length === 0 || !bookingDate) {
       setTakenBookings([]);
       setTakenBlocked([]);
       return;
     }
     async function loadSlots() {
       try {
-        const [bRes, blRes] = await Promise.all([
-          fetch("/api/admin/bookings", { credentials: "include" }),
-          fetch(`/api/admin/blocked-slots?courtId=${encodeURIComponent(courtId)}&bookingDate=${encodeURIComponent(bookingDate)}`, { credentials: "include" }),
-        ]);
+        const bRes = await fetch("/api/admin/bookings", { credentials: "include" });
         const bData = (await bRes.json()) as { data: (BookingSlot & { courtId: string; bookingDate: string })[] };
-        const blData = (await blRes.json()) as { data: (BlockedSlotItem & { courtId: string; bookingDate: string })[] };
         setTakenBookings(
-          (bData.data ?? []).filter((b) => b.courtId === courtId && (b as { bookingDate: string }).bookingDate === bookingDate)
+          (bData.data ?? []).filter((b) => selectedCourtIds.includes(b.courtId) && b.bookingDate === bookingDate)
         );
-        setTakenBlocked(blData.data ?? []);
+        const blResponses = await Promise.all(
+          selectedCourtIds.map((cId) =>
+            fetch(`/api/admin/blocked-slots?courtId=${encodeURIComponent(cId)}&bookingDate=${encodeURIComponent(bookingDate)}`, { credentials: "include" })
+          )
+        );
+        const blDataArr = await Promise.all(blResponses.map((r) => r.json())) as { data: (BlockedSlotItem & { courtId: string; bookingDate: string })[] }[];
+        setTakenBlocked(blDataArr.flatMap((d) => d.data ?? []));
       } catch {
         // silently ignore; server will validate
       }
     }
     void loadSlots();
-  }, [courtId, bookingDate]);
+  }, [selectedCourtIds, bookingDate]);
 
   useEffect(() => {
     async function load() {
@@ -159,7 +167,7 @@ export const WalkInBookingModal: FC<WalkInBookingModalProps> = ({ onClose, onCre
     e.preventDefault();
     setError(null);
 
-    if (!courtId) { setError("Please select a court."); return; }
+    if (selectedCourtIds.length === 0) { setError("Please select at least one court."); return; }
     if (!bookingDate) { setError("Please enter a booking date."); return; }
     if (!startTime || !endTime) { setError("Please enter start and end time."); return; }
     if (bookingDate === today && startTime < nowTime) { setError("Start time cannot be in the past."); return; }
@@ -191,16 +199,20 @@ export const WalkInBookingModal: FC<WalkInBookingModalProps> = ({ onClose, onCre
         if (!customerId) { setError("Please select a customer."); setSaving(false); return; }
       }
 
-      const bookingRes = await fetch("/api/admin/bookings", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ customerId, courtId, bookingDate, startTime, endTime, status }),
-      });
-      if (!bookingRes.ok) {
-        const body = await bookingRes.json().catch(() => null) as { error?: { message?: string } } | null;
-        throw new Error(body?.error?.message ?? `Failed to create booking (${bookingRes.status})`);
-      }
+      await Promise.all(
+        selectedCourtIds.map(async (cId) => {
+          const bookingRes = await fetch("/api/admin/bookings", {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ customerId, courtId: cId, bookingDate, startTime, endTime, status }),
+          });
+          if (!bookingRes.ok) {
+            const body = await bookingRes.json().catch(() => null) as { error?: { message?: string } } | null;
+            throw new Error(body?.error?.message ?? `Failed to create booking (${bookingRes.status})`);
+          }
+        })
+      );
 
       onCreated();
       onClose();
@@ -322,19 +334,28 @@ export const WalkInBookingModal: FC<WalkInBookingModalProps> = ({ onClose, onCre
             {/* ── Booking details ── */}
             <div className="grid grid-cols-2 gap-3">
               <div className="col-span-2">
-                <label className={labelCls}>Court</label>
-                <select
-                  className={inputCls}
-                  value={courtId}
-                  onChange={(e) => setCourtId(e.target.value)}
-                >
-                  <option value="">— Select court —</option>
+                <label className={labelCls}>Court{selectedCourtIds.length > 1 ? "s" : ""}</label>
+                <div className="flex flex-col gap-1.5 max-h-40 overflow-y-auto pr-1">
                   {courts.map((c) => (
-                    <option key={c._id} value={c._id}>
-                      {c.name} ({c.surfaceType})
-                    </option>
+                    <label
+                      key={c._id}
+                      className={`flex items-center gap-2 rounded-lg border px-3 py-2 cursor-pointer transition ${
+                        selectedCourtIds.includes(c._id)
+                          ? "border-[#10B981] bg-[#10B981]/10"
+                          : "border-gray-700 bg-[#111827] hover:border-gray-500"
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        className="accent-[#10B981] w-4 h-4"
+                        checked={selectedCourtIds.includes(c._id)}
+                        onChange={() => toggleCourt(c._id)}
+                      />
+                      <span className="text-sm text-gray-100">{c.name}</span>
+                      <span className="text-xs text-gray-500 ml-auto">{c.surfaceType}</span>
+                    </label>
                   ))}
-                </select>
+                </div>
               </div>
 
               <div className="col-span-2">
@@ -349,7 +370,7 @@ export const WalkInBookingModal: FC<WalkInBookingModalProps> = ({ onClose, onCre
 
               <div className="col-span-2">
                 <label className={labelCls}>Time Slot (1 hour)</label>
-                {!courtId || !bookingDate ? (
+                {selectedCourtIds.length === 0 || !bookingDate ? (
                   <p className="text-xs text-gray-500">Select a court and date first.</p>
                 ) : (
                   <>

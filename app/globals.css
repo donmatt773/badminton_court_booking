@@ -105,10 +105,7 @@
 [data-theme="light"] .bg-slate-100 { background-color: #e2e8f0; }
 
 /* ── Modal overlays (DenyModal, MarkPaidModal, ErrorModal) ── */
-[data-theme="light"] .bg-\[\#1F2937\].rounded-xl,
-[data-theme="light"] .bg-\[\#1F2937\].rounded-xl * {
-  /* Inherit from bg override above — #f8fafc */
-}
+/* Inherit from bg override above — #f8fafc */
 /* ── Sidebar: keep white text since bg stays dark ── */
 [data-theme="light"] aside .text-gray-400 { color: #e2e8f0; }
 [data-theme="light"] aside .text-gray-200 { color: #f1f5f9; }

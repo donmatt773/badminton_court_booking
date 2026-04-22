@@ -111,11 +111,13 @@ type DeleteModalState = {
 const styles = {
   // Layout
   shell:
-    "grid min-h-screen grid-cols-1 bg-[#0B0F1A] text-gray-100 lg:grid-cols-[260px_1fr]",
+    "relative grid min-h-screen grid-cols-1 bg-[#0B0F1A] text-gray-100 lg:grid-cols-[260px_1fr]",
 
   // Sidebar — dark navy
   sidebar:
-    "flex flex-row flex-wrap items-center gap-1 border-b border-white/10 bg-[#060B14] p-3 lg:flex-col lg:items-stretch lg:gap-0.5 lg:border-b-0 lg:border-r lg:border-white/10 lg:p-4",
+    "fixed inset-y-0 left-0 z-40 flex flex-col w-64 border-r border-white/10 bg-[#060B14] p-4 transition-transform duration-200 lg:static lg:translate-x-0 lg:w-auto",
+  sidebarClosed: "-translate-x-full",
+  sidebarOpen: "translate-x-0",
   brand:
     "flex w-full items-center gap-2 rounded-xl px-3 py-3 text-[16px] font-bold text-white",
   userMeta:
@@ -131,7 +133,7 @@ const styles = {
   // Main content
   main: "min-w-0",
   header:
-    "flex h-16 items-center justify-between border-b border-gray-800 bg-[#111827] px-6 shadow-sm",
+    "flex h-16 items-center justify-between border-b border-gray-800 bg-[#111827] px-4 shadow-sm",
   headerLeft: "flex flex-col gap-0.5",
   headerTitle: "text-[15px] font-bold text-white",
   headerSub: "text-[11px] text-gray-500 capitalize",
@@ -191,7 +193,7 @@ const styles = {
   // Login
   loginShell: "grid min-h-screen place-items-center p-4 bg-[#0B0F1A]",
   loginCard:
-    "flex w-full max-w-[400px] flex-col items-center gap-4 rounded-2xl border border-gray-800 bg-[#111827] px-8 py-10 shadow-2xl shadow-black/40",
+    "flex w-full max-w-[min(400px,calc(100vw-32px))] flex-col items-center gap-4 rounded-2xl border border-gray-800 bg-[#111827] px-4 py-10 sm:px-8 shadow-2xl shadow-black/40",
   loginTitle: "m-0 text-center text-[22px] font-bold text-white",
   loginSub: "-mt-2 text-center text-[13px] text-gray-400",
   loginInput: "w-full",
@@ -431,6 +433,7 @@ export default function AdminPage() {
   const [activeTab, setActiveTab] = useState<
     "bookings" | "customers" | "courts" | "users" | "abuse"
   >("bookings");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [currentUser, setCurrentUser] = useState<AdminUser | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -869,55 +872,110 @@ export default function AdminPage() {
 
   return (
     <main className={styles.shell}>
-      <aside className={styles.sidebar}>
-        <div className={styles.brand}>🏸 Admin Dashboard</div>
+      {/* Mobile overlay */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 z-30 bg-black/50 lg:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
+      <aside className={`${styles.sidebar} ${sidebarOpen ? styles.sidebarOpen : styles.sidebarClosed}`}>
+        <div className="flex items-center justify-between mb-1">
+          <div className={styles.brand}>🏸 Admin Dashboard</div>
+          <button
+            type="button"
+            onClick={() => setSidebarOpen(false)}
+            className="lg:hidden text-gray-400 hover:text-white text-xl leading-none ml-2"
+            aria-label="Close menu"
+          >✕</button>
+        </div>
         <div className={styles.userMeta}>
           {currentUser.username} · {currentUser.role}
         </div>
         <button
           className={`${styles.navButton} ${activeTab === "bookings" ? styles.navButtonActive : ""}`}
-          onClick={() => setActiveTab("bookings")}
+          onClick={() => { setActiveTab("bookings"); setSidebarOpen(false); }}
         >
           📋 Bookings
           <span className={styles.navBadge}>{bookings.length}</span>
         </button>
         <button
           className={`${styles.navButton} ${activeTab === "customers" ? styles.navButtonActive : ""}`}
-          onClick={() => setActiveTab("customers")}
+          onClick={() => { setActiveTab("customers"); setSidebarOpen(false); }}
         >
           👥 Customers
           <span className={styles.navBadge}>{customers.length}</span>
         </button>
         <button
           className={`${styles.navButton} ${activeTab === "courts" ? styles.navButtonActive : ""}`}
-          onClick={() => setActiveTab("courts")}
+          onClick={() => { setActiveTab("courts"); setSidebarOpen(false); }}
         >
           🏸 Courts
           <span className={styles.navBadge}>{courts.length}</span>
         </button>
         <button
           className={`${styles.navButton} ${activeTab === "users" ? styles.navButtonActive : ""}`}
-          onClick={() => setActiveTab("users")}
+          onClick={() => { setActiveTab("users"); setSidebarOpen(false); }}
         >
           👤 Users
           <span className={styles.navBadge}>{users.length}</span>
         </button>
         <button
           className={`${styles.navButton} ${activeTab === "abuse" ? styles.navButtonActive : ""}`}
-          onClick={() => setActiveTab("abuse")}
+          onClick={() => { setActiveTab("abuse"); setSidebarOpen(false); }}
         >
           ⚠️ Abuse Logs
           <span className={styles.navBadge}>{abuseLogs.length}</span>
         </button>
+
+        {/* Mobile-only action buttons */}
+        <div className="mt-auto pt-4 flex flex-col gap-2 lg:hidden">
+          <div className="border-t border-white/10 mb-2" />
+          <button
+            type="button"
+            className={`${styles.btn} ${styles.btnDark} w-full justify-start`}
+            onClick={() => { setSidebarOpen(false); void handleBackToWebsite(); }}
+          >
+            🌐 Back to Website
+          </button>
+          <button
+            type="button"
+            className={`${styles.btn} ${styles.btnDark} w-full justify-start`}
+            onClick={() => { setSidebarOpen(false); void loadAll(); }}
+            disabled={loading}
+          >
+            🔄 Refresh
+          </button>
+          <button
+            type="button"
+            className={`${styles.btn} ${styles.btnDanger} w-full justify-start`}
+            onClick={() => void handleLogout()}
+          >
+            🚪 Logout
+          </button>
+        </div>
       </aside>
 
       <section className={styles.main}>
         <header className={styles.header}>
-          <div className={styles.headerLeft}>
-            <div className={styles.headerTitle}>Admin Dashboard</div>
-            <div className={styles.headerSub}>{activeTab}</div>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setSidebarOpen(true)}
+              className="lg:hidden text-gray-400 hover:text-white"
+              aria-label="Open menu"
+            >
+              <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                <path strokeLinecap="round" d="M4 6h16M4 12h16M4 18h16" />
+              </svg>
+            </button>
+            <div className={styles.headerLeft}>
+              <div className={styles.headerTitle}>Admin Dashboard</div>
+              <div className={styles.headerSub}>{activeTab}</div>
+            </div>
           </div>
-          <div className={styles.headerActions}>
+          <div className={styles.headerActions + " hidden lg:flex"}>
             <button
               type="button"
               className={`${styles.btn} ${styles.btnDark}`}

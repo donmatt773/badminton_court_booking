@@ -344,6 +344,8 @@ export default function BookingExperience() {
   const [statusMessage, setStatusMessage] = useState("");
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [reservationStep, setReservationStep] = useState<1 | 2>(1);
+  const [courtsPage, setCourtsPage] = useState(1);
+  const COURTS_PER_PAGE = 6;
 
   const [form, setForm] = useState<BookingInput>({
     name: "",
@@ -356,6 +358,15 @@ export default function BookingExperience() {
     paymentMethod: "cash",
     paymentProofImage: "",
   });
+
+  const [selectedCourtIds, setSelectedCourtIds] = useState<string[]>([]);
+
+  function toggleCourt(id: string) {
+    setSelectedCourtIds((prev) =>
+      prev.includes(id) ? prev.filter((c) => c !== id) : [...prev, id]
+    );
+    setForm((prev) => ({ ...prev, startTime: "", endTime: "" }));
+  }
 
   const {
     data,
@@ -382,22 +393,22 @@ export default function BookingExperience() {
   const isInitialLoading = isLoading && !data;
   const errorMessage = submissionErrorMessage || (queryError?.message ?? "");
 
-  // Occupied bookings for the selected court (PENDING is also treated as unavailable).
+  // Occupied bookings for the selected courts (PENDING is also treated as unavailable).
   const activeBookingsForCourt = useMemo(
     () =>
       bookings.filter(
         (b) =>
-          b.courtId === form.courtId &&
+          selectedCourtIds.includes(b.courtId) &&
           ["PENDING", "CONFIRMED", "PAID", "APPROVED"].includes(b.status) &&
           !b.isArchived
       ),
-    [bookings, form.courtId]
+    [bookings, selectedCourtIds]
   );
 
-  // Blocked slots for the selected court
+  // Blocked slots for the selected courts
   const courtBlockedSlots = useMemo(
-    () => blockedSlots.filter((s) => s.courtId === form.courtId),
-    [blockedSlots, form.courtId]
+    () => blockedSlots.filter((s) => selectedCourtIds.includes(s.courtId)),
+    [blockedSlots, selectedCourtIds]
   );
 
   // Check if a proposed start/end overlaps any booking or blocked slot
@@ -409,24 +420,13 @@ export default function BookingExperience() {
     );
   }
 
-  const selectedCourt = useMemo(
-    () => courts.find((c) => c.id === form.courtId) ?? null,
-    [courts, form.courtId]
+  const selectedCourts = useMemo(
+    () => courts.filter((c) => selectedCourtIds.includes(c.id)),
+    [courts, selectedCourtIds]
   );
 
   const refetchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isRefetchingFromRealtimeRef = useRef(false);
-
-  useEffect(() => {
-    setForm((prev) => {
-      const hasCurrentCourt = courts.some((court) => court.id === prev.courtId);
-      if (hasCurrentCourt || courts.length === 0) {
-        return prev;
-      }
-
-      return { ...prev, courtId: courts[0].id };
-    });
-  }, [courts]);
 
   useEffect(() => {
     const pusher = getPusherClient();
@@ -488,7 +488,8 @@ export default function BookingExperience() {
 
   // -------------------------------------------------------------------------
   function openModal(courtId: string) {
-    setForm((prev) => ({ ...prev, courtId, startTime: "", endTime: "", paymentMethod: "cash", paymentProofImage: "" }));
+    setSelectedCourtIds([courtId]);
+    setForm((prev) => ({ ...prev, startTime: "", endTime: "", paymentMethod: "cash", paymentProofImage: "" }));
     setStatusMessage("");
     setSubmissionErrorMessage("");
     setReservationStep(1);
@@ -496,6 +497,9 @@ export default function BookingExperience() {
   }
 
   function validateStepOne(): string | null {
+    if (selectedCourtIds.length === 0) {
+      return "Please select at least one court.";
+    }
     if (!form.startTime || !form.endTime) {
       return "Please select a time slot.";
     }
@@ -544,13 +548,11 @@ export default function BookingExperience() {
     setSubmissionErrorMessage("");
     setStatusMessage("");
     try {
-      const result = await createBooking({
-        variables: { input: form },
-      });
-      const createdBooking = result.data?.createBooking;
-      if (!createdBooking) {
-        throw new Error("Booking could not be submitted.");
-      }
+      await Promise.all(
+        selectedCourtIds.map((cId) =>
+          createBooking({ variables: { input: { ...form, courtId: cId } } })
+        )
+      );
       setStatusMessage("Reservation submitted! Your slot is pending admin approval.");
       setIsModalOpen(false);
       await refetch();
@@ -614,24 +616,9 @@ export default function BookingExperience() {
         <a href="#home" style={{ display: "inline-flex" }}>
           <Image src="/assets/LOGO-NEW-SPORTSCENTER.png" alt="Sports Center" width={130} height={30} priority />
         </a>
-        <div style={{ display: "flex", alignItems: "center", gap: 20, fontSize: 13 }}>
-          <a href="#home" style={{ color: "rgba(255,255,255,0.85)", textDecoration: "none" }}>Home</a>
-          <a href="#courts" style={{ color: "rgba(255,255,255,0.85)", textDecoration: "none" }}>Courts</a>
-          <a
-            href="#courts"
-            style={{
-              background: "#ffffff",
-              color: "#0d6b4e",
-              padding: "8px 16px",
-              borderRadius: "var(--border-radius-md)",
-              textDecoration: "none",
-              fontWeight: 600,
-              fontSize: 13,
-              boxShadow: "0 1px 4px rgba(0,0,0,0.12)",
-            }}
-          >
-            Reserve a court
-          </a>
+        <div style={{ display: "flex", alignItems: "center", gap: 30, flexWrap: "wrap", fontSize: 13 }}>
+          <a href="#home" className="hidden sm:inline" style={{ color: "rgba(255,255,255,0.85)", textDecoration: "none" }}>Home</a>
+          <a href="#courts" className="hidden sm:inline" style={{ color: "rgba(255,255,255,0.85)", textDecoration: "none" }}>Courts</a>
           <Link
             href="/Login"
             style={{
@@ -784,9 +771,10 @@ export default function BookingExperience() {
               type="date"
               value={form.bookingDate}
               min={todayISODate()}
-              onChange={(e) =>
-                setForm((prev) => ({ ...prev, bookingDate: e.target.value, startTime: "", endTime: "" }))
-              }
+              onChange={(e) => {
+                setForm((prev) => ({ ...prev, bookingDate: e.target.value, startTime: "", endTime: "" }));
+                setCourtsPage(1);
+              }}
               style={{
                 ...inputStyle,
                 height: 36,
@@ -857,14 +845,14 @@ export default function BookingExperience() {
         <ul
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))",
+            gridTemplateColumns: "repeat(auto-fill, minmax(min(220px, 100%), 1fr))",
             gap: 12,
             listStyle: "none",
             padding: 0,
             margin: 0,
           }}
         >
-          {courts.map((court) => {
+          {courts.slice((courtsPage - 1) * COURTS_PER_PAGE, courtsPage * COURTS_PER_PAGE).map((court) => {
             const bookedStarts = bookings
               .filter(
                 (b) =>
@@ -918,7 +906,7 @@ export default function BookingExperience() {
                       color: court.surfaceType === "wooden" ? "#FCD34D" : "#A7F3D0",
                     }}
                   >
-                    {court.surfaceType} surface
+                    {court.surfaceType.charAt(0).toUpperCase() + court.surfaceType.slice(1)} Surface
                   </span>
 
                   <h3
@@ -979,6 +967,76 @@ export default function BookingExperience() {
             );
           })}
         </ul>
+
+        {/* Pagination */}
+        {courts.length > COURTS_PER_PAGE && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 6,
+              marginTop: 24,
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setCourtsPage((p) => Math.max(1, p - 1))}
+              disabled={courtsPage === 1}
+              style={{
+                padding: "7px 14px",
+                fontSize: 13,
+                fontWeight: 500,
+                borderRadius: "var(--border-radius-md)",
+                border: "1px solid var(--color-border-secondary)",
+                background: "var(--color-background-primary)",
+                color: courtsPage === 1 ? "var(--color-text-secondary)" : "var(--color-text-primary)",
+                cursor: courtsPage === 1 ? "not-allowed" : "pointer",
+                opacity: courtsPage === 1 ? 0.5 : 1,
+              }}
+            >
+              ‹ Prev
+            </button>
+            {Array.from({ length: Math.ceil(courts.length / COURTS_PER_PAGE) }, (_, i) => i + 1).map((page) => (
+              <button
+                key={page}
+                type="button"
+                onClick={() => setCourtsPage(page)}
+                style={{
+                  width: 34,
+                  height: 34,
+                  fontSize: 13,
+                  fontWeight: page === courtsPage ? 700 : 400,
+                  borderRadius: "var(--border-radius-md)",
+                  border: page === courtsPage ? "1.5px solid #10B981" : "1px solid var(--color-border-secondary)",
+                  background: page === courtsPage ? "rgba(16,185,129,0.12)" : "var(--color-background-primary)",
+                  color: page === courtsPage ? "#10B981" : "var(--color-text-primary)",
+                  cursor: "pointer",
+                }}
+              >
+                {page}
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={() => setCourtsPage((p) => Math.min(Math.ceil(courts.length / COURTS_PER_PAGE), p + 1))}
+              disabled={courtsPage === Math.ceil(courts.length / COURTS_PER_PAGE)}
+              style={{
+                padding: "7px 14px",
+                fontSize: 13,
+                fontWeight: 500,
+                borderRadius: "var(--border-radius-md)",
+                border: "1px solid var(--color-border-secondary)",
+                background: "var(--color-background-primary)",
+                color: courtsPage === Math.ceil(courts.length / COURTS_PER_PAGE) ? "var(--color-text-secondary)" : "var(--color-text-primary)",
+                cursor: courtsPage === Math.ceil(courts.length / COURTS_PER_PAGE) ? "not-allowed" : "pointer",
+                opacity: courtsPage === Math.ceil(courts.length / COURTS_PER_PAGE) ? 0.5 : 1,
+              }}
+            >
+              Next ›
+            </button>
+          </div>
+        )}
       </section>
 
       {/* ── FOOTER ── */}
@@ -1056,7 +1114,7 @@ export default function BookingExperience() {
             onClick={(e) => e.stopPropagation()}
             style={{
               width: "100%",
-              maxWidth: 600,
+              maxWidth: "min(600px, calc(100vw - 24px))",
               maxHeight: "calc(100dvh - 20px)",
               overflowY: "auto",
               background: "var(--color-background-primary)",
@@ -1081,7 +1139,7 @@ export default function BookingExperience() {
                   Reservation
                 </p>
                 <h3 style={{ margin: 0, fontSize: 17, fontWeight: 500 }}>
-                  {selectedCourt ? `Book ${selectedCourt.name}` : "Book a court"}
+                  {selectedCourts.length === 1 ? `Book ${selectedCourts[0].name}` : selectedCourts.length > 1 ? `Book ${selectedCourts.length} courts` : "Book a court"}
                 </h3>
               </div>
               <button
@@ -1118,7 +1176,7 @@ export default function BookingExperience() {
               >
                 <div>
                   <p style={{ margin: "0 0 2px", fontSize: 13, fontWeight: 500, color: "#E2E8F0" }}>
-                    {selectedCourt?.name} · {form.bookingDate}
+                    {selectedCourts.length === 1 ? selectedCourts[0].name : `${selectedCourts.length} courts`} · {form.bookingDate}
                   </p>
                   <p style={{ margin: 0, fontSize: 12, color: "#94A3B8" }}>
                     {formatHour(form.startTime)} – {form.endTime ? formatHour(form.endTime) : "…"}
@@ -1196,6 +1254,39 @@ export default function BookingExperience() {
 
             {reservationStep === 1 && (
               <div style={{ marginBottom: 10 }}>
+                {/* Court selection */}
+                <div style={{ marginBottom: 12 }}>
+                  <p style={{ margin: "0 0 8px", fontSize: 13, fontWeight: 500, color: "var(--color-text-primary)" }}>
+                    Select court{selectedCourtIds.length !== 1 ? "s" : ""}
+                  </p>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 160, overflowY: "auto" }}>
+                    {courts.filter((c) => c.status === "active").map((court) => (
+                      <label
+                        key={court.id}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 10,
+                          padding: "8px 12px",
+                          borderRadius: "var(--border-radius-md)",
+                          border: selectedCourtIds.includes(court.id) ? "1px solid rgba(16,185,129,0.55)" : "1px solid var(--color-border-tertiary)",
+                          background: selectedCourtIds.includes(court.id) ? "rgba(16,185,129,0.08)" : "var(--color-background-secondary)",
+                          cursor: "pointer",
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedCourtIds.includes(court.id)}
+                          onChange={() => toggleCourt(court.id)}
+                          style={{ accentColor: "#10B981", width: 16, height: 16, flexShrink: 0 }}
+                        />
+                        <span style={{ fontSize: 13, color: "var(--color-text-primary)" }}>{court.name}</span>
+                        <span style={{ fontSize: 12, color: "var(--color-text-secondary)", marginLeft: "auto" }}>{court.surfaceType}</span>
+                        <span style={{ fontSize: 12, color: "#10B981", fontWeight: 600 }}>₱{(court.price ?? 0).toFixed(2)}/hr</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
                 <div style={{ marginBottom: 10 }}>
                   <p style={{ margin: "0 0 10px", fontSize: 13, fontWeight: 500, color: "var(--color-text-primary)" }}>
                     Select a date
@@ -1322,12 +1413,12 @@ export default function BookingExperience() {
             )}
 
             {reservationStep === 2 && (() => {
-              const pricePerHour = selectedCourt?.price ?? 0;
               const durationMinutes = form.startTime && form.endTime
                 ? Math.max(0, toMinutes(form.endTime) - toMinutes(form.startTime))
                 : 0;
               const hours = durationMinutes / 60;
-              const total = pricePerHour * hours;
+              const totalPricePerHour = selectedCourts.reduce((sum, c) => sum + (c.price ?? 0), 0);
+              const total = totalPricePerHour * hours;
               const hasSelection = durationMinutes > 0;
               return (
                 <div style={{ marginBottom: 10 }}>
@@ -1420,9 +1511,15 @@ export default function BookingExperience() {
                         </p>
                       ) : (
                         <>
+                          {selectedCourts.length > 1 && selectedCourts.map((c) => (
+                            <div key={c.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "var(--color-text-secondary)", marginBottom: 2 }}>
+                              <span>{c.name}</span>
+                              <span>₱{(c.price ?? 0).toFixed(2)} / hr</span>
+                            </div>
+                          ))}
                           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--color-text-secondary)", marginBottom: 4 }}>
-                            <span>Rate</span>
-                            <span>₱{pricePerHour.toFixed(2)} / hr</span>
+                            <span>Rate{selectedCourts.length > 1 ? " (combined)" : ""}</span>
+                            <span>₱{totalPricePerHour.toFixed(2)} / hr</span>
                           </div>
                           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--color-text-secondary)", marginBottom: 8 }}>
                             <span>Duration</span>

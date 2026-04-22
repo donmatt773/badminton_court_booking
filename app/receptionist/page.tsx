@@ -13,8 +13,7 @@ import { ProfileTab } from './components/profile-tab';
 
 const CourtViewer: FC = () => (
   <div
-    className="bg-[#111827] rounded-xl shadow-lg p-4 min-w-80 w-full"
-    style={{ maxWidth: "1280px", minHeight: "calc(100vh - 2rem)" }}
+    className="bg-[#111827] rounded-xl shadow-lg p-4 w-full"
   >
     <div className="text-lg font-semibold text-gray-200 mb-3 border-b border-gray-700 pb-2">Courts</div>
     <CourtTable />
@@ -22,8 +21,7 @@ const CourtViewer: FC = () => (
 );
 const SchedulesViewer: FC = () => (
   <div
-    className="bg-[#111827] rounded-xl shadow-lg p-4 min-w-80 w-full"
-    style={{ maxWidth: "1800px" }}
+    className="bg-[#111827] rounded-xl shadow-lg p-4 w-full"
   >
     <div className="text-lg font-semibold text-gray-200 mb-3 border-b border-gray-700 pb-2">Schedules Calendar</div>
     <ScheduleCalendar />
@@ -300,7 +298,7 @@ const RevenueViewer: FC<{ staffName: string }> = ({ staffName }) => {
 
   return (
     <div
-      className="bg-[#111827] rounded-xl shadow-lg p-5 min-w-80 w-full"
+      className="bg-[#111827] rounded-xl shadow-lg p-5 w-full"
       style={{ maxWidth: "1280px", minHeight: "calc(100vh - 2rem)" }}
     >
       {/* Header */}
@@ -548,6 +546,7 @@ const TABS: Tab[] = [
 
 const ReceptionistDashboard: FC = () => {
   const [activeTab, setActiveTab] = useState<TabKey>('requests');
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [isCheckingSession, setIsCheckingSession] = useState(true);
   const [showWalkIn, setShowWalkIn] = useState(false);
@@ -718,21 +717,42 @@ const ReceptionistDashboard: FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-[#0B0F1A] font-sans flex flex-row">
-      <aside className="w-52 shrink-0 bg-[#060B14] text-white flex flex-col items-stretch py-6 shadow-lg border-r border-white/10">
-        <div className="text-xl font-bold tracking-wide mb-6 text-center text-emerald-400">🏸 Receptionist</div>
-        <nav className="flex flex-col gap-1 px-3">
+    <div className="min-h-screen bg-[#0B0F1A] font-sans flex flex-col md:flex-row">
+      {/* Mobile overlay */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 z-30 bg-black/50 md:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
+      {/* Sidebar */}
+      <aside
+        className={`fixed inset-y-0 left-0 z-40 flex flex-col w-56 bg-[#060B14] text-white shadow-xl transition-transform duration-200 md:static md:translate-x-0 md:w-52 md:shrink-0 md:border-r md:border-white/10 ${
+          sidebarOpen ? 'translate-x-0' : '-translate-x-full'
+        }`}
+      >
+        <div className="flex items-center justify-between px-4 py-4 border-b border-white/10">
+          <span className="text-base font-bold text-emerald-400">🏸 Receptionist</span>
+          <button
+            type="button"
+            onClick={() => setSidebarOpen(false)}
+            className="md:hidden text-gray-400 hover:text-white text-xl leading-none"
+            aria-label="Close menu"
+          >✕</button>
+        </div>
+        <nav className="flex flex-col gap-1 px-3 py-3 flex-1 overflow-y-auto">
           {TABS.map((tab) => (
             <button
               key={tab.key}
               className={`border-none text-gray-400 text-sm font-medium text-left py-2.5 px-3 rounded-lg cursor-pointer transition hover:bg-white/6 hover:text-white${activeTab === tab.key ? ' bg-emerald-600 text-white hover:bg-emerald-700' : ''}`}
-              onClick={() => setActiveTab(tab.key)}
+              onClick={() => { setActiveTab(tab.key); setSidebarOpen(false); }}
             >
               {tab.label}
             </button>
           ))}
         </nav>
-        <div className="mt-auto px-3 pt-8">
+        <div className="px-3 py-4">
           <button
             type="button"
             onClick={handleLogout}
@@ -743,8 +763,27 @@ const ReceptionistDashboard: FC = () => {
           </button>
         </div>
       </aside>
-      <div className="flex-1 min-w-0 overflow-hidden flex justify-center items-stretch py-3 px-4 bg-[#0B0F1A]">
+
+      {/* Main content */}
+      <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
+        {/* Mobile topbar */}
+        <div className="flex items-center gap-3 px-4 py-3 bg-[#060B14] border-b border-white/10 md:hidden">
+          <button
+            type="button"
+            onClick={() => setSidebarOpen(true)}
+            className="text-gray-400 hover:text-white"
+            aria-label="Open menu"
+          >
+            <svg width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+              <path strokeLinecap="round" d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          </button>
+          <span className="text-sm font-semibold text-emerald-400">🏸 Receptionist</span>
+        </div>
+
+        <div className="flex-1 min-w-0 overflow-hidden flex justify-center items-stretch py-3 px-4 bg-[#0B0F1A]">
         {content}
+        </div>
       </div>
 
       {showWalkIn && (
