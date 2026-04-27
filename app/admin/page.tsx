@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import { BlockedSlotManager } from "@/app/receptionist/components/blocked-slot-manager";
 
 type AdminUser = {
@@ -568,6 +569,7 @@ export default function AdminPage() {
     abuse: 1,
     revenue: 1,
     revenueBookings: 1,
+    blocked: 1,
   });
 
   const customerOptions = useMemo(
@@ -1605,7 +1607,7 @@ export default function AdminPage() {
                           </button>
                         </td>
                         <td>
-                          {booking.courtId} | {booking.bookingDate} {booking.startTime}-{booking.endTime}
+                          {courtNameMap[booking.courtId] ?? booking.courtId} | {booking.bookingDate} {booking.startTime}-{booking.endTime}
                         </td>
                         <td>
                           <span className={statusClassName(booking.status)}>{booking.status}</span>
@@ -1969,38 +1971,71 @@ export default function AdminPage() {
 
                 <div className="mb-4 rounded-xl border border-cyan-700/40 bg-[#0B0F1A] px-4 py-4">
                   <div className="mb-3 flex items-center justify-between gap-2">
-                    <p className="text-xs uppercase tracking-wide text-cyan-300">6-Month Contribution</p>
+                    <p className="text-xs uppercase tracking-wide text-cyan-300">6-Month Revenue Trend</p>
                     <div className="flex items-center gap-3 text-[11px] text-gray-400">
                       <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-emerald-500" />Booking</span>
                       <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-cyan-500" />Blocked</span>
                     </div>
                   </div>
-                  <div className="flex h-44 items-end gap-3">
-                    {revenueTrend.map((item) => {
-                      const bookingHeight = (item.bookingTotal / revenueTrendMax) * 100;
-                      const blockedHeight = (item.blockedTotal / revenueTrendMax) * 100;
-                      const isCurrent = item.month === revenueFilterMonth;
-
-                      return (
-                        <div key={item.month} className="flex min-w-0 flex-1 flex-col items-center gap-1">
-                          <span className="text-[10px] text-gray-500">
-                            ₱{item.combinedTotal >= 1000 ? `${(item.combinedTotal / 1000).toFixed(1)}k` : item.combinedTotal.toFixed(0)}
-                          </span>
-                          <div className={`flex w-full flex-col justify-end overflow-hidden rounded-t-md border ${isCurrent ? "border-cyan-500/60" : "border-gray-800"}`} style={{ height: "120px" }}>
-                            <div
-                              className="w-full bg-cyan-500 transition-[height] duration-300"
-                              style={{ height: `${Math.max(item.blockedTotal > 0 ? 4 : 0, blockedHeight)}%` }}
-                            />
-                            <div
-                              className="w-full bg-emerald-500 transition-[height] duration-300"
-                              style={{ height: `${Math.max(item.bookingTotal > 0 ? 4 : 0, bookingHeight)}%` }}
-                            />
-                          </div>
-                          <span className={`text-[10px] ${isCurrent ? "font-semibold text-cyan-300" : "text-gray-500"}`}>{item.label}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
+                  <ResponsiveContainer width="100%" height={300}>
+                    <LineChart
+                      data={revenueTrend}
+                      margin={{ top: 5, right: 30, left: 0, bottom: 5 }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
+                      <XAxis 
+                        dataKey="label" 
+                        stroke="rgba(255,255,255,0.5)"
+                        style={{ fontSize: 12 }}
+                      />
+                      <YAxis 
+                        stroke="rgba(255,255,255,0.5)"
+                        style={{ fontSize: 12 }}
+                        tickFormatter={(value) => `₱${value >= 1000 ? (value / 1000).toFixed(0) + 'k' : value.toFixed(0)}`}
+                      />
+                      <Tooltip 
+                        contentStyle={{ 
+                          backgroundColor: "rgba(11, 15, 26, 0.95)", 
+                          border: "1px solid rgba(16, 185, 129, 0.3)",
+                          borderRadius: "8px"
+                        }}
+                        formatter={(value) => `₱${typeof value === 'number' ? value.toLocaleString('en-PH', { minimumFractionDigits: 0 }) : value}`}
+                        labelStyle={{ color: "#ccc" }}
+                      />
+                      <Legend 
+                        wrapperStyle={{ paddingTop: "20px" }}
+                        iconType="line"
+                      />
+                      <Line 
+                        type="monotone" 
+                        dataKey="bookingTotal" 
+                        stroke="#10B981" 
+                        strokeWidth={2}
+                        dot={{ fill: "#10B981", r: 4 }}
+                        activeDot={{ r: 6 }}
+                        name="Booking Revenue"
+                      />
+                      <Line 
+                        type="monotone" 
+                        dataKey="blockedTotal" 
+                        stroke="#06B6D4" 
+                        strokeWidth={2}
+                        dot={{ fill: "#06B6D4", r: 4 }}
+                        activeDot={{ r: 6 }}
+                        name="Blocked Revenue"
+                      />
+                      <Line 
+                        type="monotone" 
+                        dataKey="combinedTotal" 
+                        stroke="#8B5CF6" 
+                        strokeWidth={2}
+                        dot={{ fill: "#8B5CF6", r: 4 }}
+                        activeDot={{ r: 6 }}
+                        strokeDasharray="5 5"
+                        name="Total Revenue"
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
                 </div>
 
                 <div className={styles.tableWrap}>
@@ -2027,7 +2062,7 @@ export default function AdminPage() {
                       ) : (
                         paginatedRevenueRows.rows.map((row) => (
                           row.type === "blocked" ? (
-                              <tr key={`blocked-${session._id}`}>
+                              <tr key={`blocked-${row.session._id}`}>
                                 <td><span className="rounded bg-cyan-900/40 px-2 py-0.5 text-[11px] text-cyan-200">Blocked</span></td>
                                 <td>{courtNameMap[row.session.courtId] ?? row.session.courtId}</td>
                                 <td>{row.session.bookingDate}</td>

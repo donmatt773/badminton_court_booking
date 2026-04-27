@@ -63,7 +63,7 @@ export const WalkInBookingModal: FC<WalkInBookingModalProps> = ({ onClose, onCre
       prev.includes(id) ? prev.filter((c) => c !== id) : [...prev, id]
     );
   }
-  const [bookingDate, setBookingDate] = useState("");
+  const [bookingDate, setBookingDate] = useState(localISODate());
   const [startTime, setStartTime] = useState("");
   const [endTime, setEndTime] = useState("");
   const [status, setStatus] = useState("APPROVED");
@@ -145,7 +145,11 @@ export const WalkInBookingModal: FC<WalkInBookingModalProps> = ({ onClose, onCre
         ]);
         const courtsData = (await courtsRes.json()) as { data: Court[] };
         const customersData = (await customersRes.json()) as { data: Customer[] };
-        setCourts((courtsData.data ?? []).filter((c) => c.status === "active"));
+        setCourts((courtsData.data ?? []).filter((c) => c.status === "active").sort((a, b) => {
+          const numA = parseInt(a.name.replace(/\D/g, '') || '0');
+          const numB = parseInt(b.name.replace(/\D/g, '') || '0');
+          return numA - numB;
+        }));
         setCustomers(customersData.data ?? []);
       } catch {
         setError("Failed to load courts or customers.");
@@ -364,6 +368,7 @@ export const WalkInBookingModal: FC<WalkInBookingModalProps> = ({ onClose, onCre
                 <input
                   className={inputCls}
                   type="date"
+                  min={today}
                   value={bookingDate}
                   onChange={(e) => setBookingDate(e.target.value)}
                 />

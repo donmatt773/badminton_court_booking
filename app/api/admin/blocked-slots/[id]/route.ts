@@ -118,7 +118,9 @@ export async function PUT(
     const startedAt = new Date(blockedSlot.sessionStartedAt);
     const durationHours = computeDurationHours(startedAt, endedAt);
     const rate = Math.max(0, blockedSlot.hourlyRateSnapshot ?? 0);
-    const chargedAmount = roundToTwoDecimals(durationHours * rate);
+    // Billing tiers: ≤1 hour = 1 hour charge, >1 hour = 2 hour charge
+    const billedHours = durationHours <= 1 ? 1 : 2;
+    const chargedAmount = roundToTwoDecimals(billedHours * rate);
 
     const recurrenceUntilDate = blockedSlot.recurrenceUntilDate
       ? String(blockedSlot.recurrenceUntilDate)

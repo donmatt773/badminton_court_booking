@@ -621,7 +621,7 @@ export default function BookingExperience() {
           <a href="#home" className="hidden sm:inline" style={{ color: "rgba(255,255,255,0.85)", textDecoration: "none" }}>Home</a>
           <a href="#courts" className="hidden sm:inline" style={{ color: "rgba(255,255,255,0.85)", textDecoration: "none" }}>Courts</a>
           <Link
-            href="/Login"
+            href="/login"
             style={{
               padding: "8px 16px",
               borderRadius: "var(--border-radius-md)",
@@ -1179,6 +1179,11 @@ export default function BookingExperience() {
                   <p style={{ margin: "0 0 2px", fontSize: 13, fontWeight: 500, color: "#E2E8F0" }}>
                     {selectedCourts.length === 1 ? selectedCourts[0].name : `${selectedCourts.length} courts`} · {form.bookingDate}
                   </p>
+                  {selectedCourts.length > 1 && (
+                    <p style={{ margin: "0 0 2px", fontSize: 12, color: "#A7F3D0" }}>
+                      {selectedCourts.map((court) => court.name).join(", ")}
+                    </p>
+                  )}
                   <p style={{ margin: 0, fontSize: 12, color: "#94A3B8" }}>
                     {formatHour(form.startTime)} – {form.endTime ? formatHour(form.endTime) : "…"}
                   </p>
@@ -1425,7 +1430,7 @@ export default function BookingExperience() {
                 <div style={{ marginBottom: 10 }}>
                   <div style={{ marginBottom: 10, display: "grid", gap: 8 }}>
                     <label style={labelStyle}>
-                      Full name
+                      Name
                       <input
                         style={inputStyle}
                         required
@@ -1486,7 +1491,7 @@ export default function BookingExperience() {
                           textTransform: "capitalize",
                         }}
                       >
-                        {method === "cash" ? "💵 Cash" : "📱 Online"}
+                        {method === "cash" ? "💵 Cash on Arrival" : "📱 Online Payment"}
                       </button>
                     ))}
                   </div>
@@ -1504,7 +1509,10 @@ export default function BookingExperience() {
                       }}
                     >
                       <p style={{ margin: "0 0 8px", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: hasSelection ? "#6EE7B7" : "var(--color-text-secondary)" }}>
-                        Payment summary
+                        Payment on arrival
+                      </p>
+                      <p style={{ margin: "0 0 8px", fontSize: 12, color: "var(--color-text-secondary)" }}>
+                        No upfront payment required. Confirm now and pay at the front desk when you arrive.
                       </p>
                       {!hasSelection ? (
                         <p style={{ margin: 0, fontSize: 12, color: "var(--color-text-secondary)" }}>
@@ -1519,19 +1527,19 @@ export default function BookingExperience() {
                             </div>
                           ))}
                           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--color-text-secondary)", marginBottom: 4 }}>
-                            <span>Rate{selectedCourts.length > 1 ? " (combined)" : ""}</span>
+                            <span>Hourly rate{selectedCourts.length > 1 ? " (combined)" : ""}</span>
                             <span>₱{totalPricePerHour.toFixed(2)} / hr</span>
                           </div>
                           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--color-text-secondary)", marginBottom: 8 }}>
-                            <span>Duration</span>
+                            <span>Booking duration</span>
                             <span>{Math.floor(durationMinutes / 60)}h {durationMinutes % 60}m</span>
                           </div>
                           <div style={{ borderTop: "1px solid rgba(16,185,129,0.2)", paddingTop: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                            <span style={{ fontSize: 13, fontWeight: 600, color: "var(--color-text-primary)" }}>Total</span>
+                            <span style={{ fontSize: 13, fontWeight: 600, color: "var(--color-text-primary)" }}>Amount due on arrival</span>
                             <span style={{ fontSize: 18, fontWeight: 700, color: "#10B981" }}>₱{total.toFixed(2)}</span>
                           </div>
                           <p style={{ margin: "6px 0 0", fontSize: 11, color: "var(--color-text-secondary)" }}>
-                            Payment is collected at the venue upon arrival.
+                            Bring exact amount if possible for faster check-in.
                           </p>
                         </>
                       )}

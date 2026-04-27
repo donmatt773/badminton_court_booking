@@ -3,6 +3,7 @@ import { startPendingExpiryJob } from "@/lib/server/graphql/cron/expire-pending-
 import { seedDefaultAdmin } from "@/lib/server/graphql/bootstrap/seed-default-admin";
 import { migrateLegacyCourts } from "@/lib/server/graphql/bootstrap/migrate-legacy-courts";
 import { migrateLegacyBookings } from "@/lib/server/graphql/bootstrap/migrate-legacy-bookings";
+import { migrateBlockedSlotBilling } from "@/lib/server/graphql/bootstrap/migrate-blocked-slot-billing";
 
 const globalRuntime = globalThis as {
   graphqlRuntimeStarted?: boolean;
@@ -19,6 +20,7 @@ export async function ensureGraphQLRuntimeStarted(): Promise<void> {
       await ensureDbConnected();
       await migrateLegacyCourts();
       await migrateLegacyBookings();
+      await migrateBlockedSlotBilling();
       await seedDefaultAdmin();
       startPendingExpiryJob();
       globalRuntime.graphqlRuntimeStarted = true;

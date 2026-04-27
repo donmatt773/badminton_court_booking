@@ -1,7 +1,7 @@
 "use client";
-import React, { useEffect, useRef, useState, FC } from 'react';
+import React, { useEffect, useRef, useState, FC, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 
 import { BookingTable, type StatusTab } from './components/booking-table';
 
@@ -226,18 +226,37 @@ const RevenueViewer: FC<{ staffName: string }> = ({ staffName }) => {
   const courtRows = Object.values(courtRevenue).sort((a, b) => b.amount - a.amount);
 
   // Monthly trend (last 6 months)
-  const trendMonths = Array.from({ length: 6 }, (_, i) => {
-    const d = new Date();
-    d.setMonth(d.getMonth() - i);
-    return d.toISOString().slice(0, 7);
-  }).reverse();
-  const trend = trendMonths.map((m) => ({
-    label: MONTHS[parseInt(m.slice(5, 7)) - 1],
-    total: bookings
-      .filter((b) => paidStatuses.has(b.status) && b.bookingDate.startsWith(m))
-      .reduce((sum, b) => sum + calcAmount(b), 0),
-  }));
-  const trendMax = Math.max(...trend.map((t) => t.total), 1);
+  const revenueTrend = useMemo(() => {
+    const months = Array.from({ length: 6 }, (_, i) => {
+      const d = new Date();
+      d.setMonth(d.getMonth() - i);
+      return d.toISOString().slice(0, 7);
+    }).reverse();
+
+    return months.map((m) => {
+      const bookingTotal = bookings
+        .filter((b) => paidStatuses.has(b.status) && b.bookingDate.startsWith(m))
+        .reduce((sum, b) => sum + calcAmount(b), 0);
+
+      const blockedTotal = blockedSessions
+        .filter(
+          (session) =>
+            !!session.sessionEndedAt &&
+            typeof session.chargedAmount === "number" &&
+            toYearMonth(session.sessionEndedAt as string) === m
+        )
+        .reduce((sum, session) => sum + (session.chargedAmount ?? 0), 0);
+
+      return {
+        month: m,
+        label: MONTHS[parseInt(m.slice(5, 7)) - 1],
+        bookingTotal,
+        blockedTotal,
+        combinedTotal: bookingTotal + blockedTotal,
+      };
+    });
+  }, [blockedSessions, bookings, calcAmount, paidStatuses]);
+  const trendMax = Math.max(...revenueTrend.map((t) => t.combinedTotal), 1);
 
   const [filterYear, filterMonthNum] = filterMonth.split("-");
   const monthLabel = `${MONTHS[parseInt(filterMonthNum) - 1]} ${filterYear}`;
@@ -716,26 +735,74 @@ const RevenueViewer: FC<{ staffName: string }> = ({ staffName }) => {
             </div>
           )}
 
-          {/* Monthly trend bar chart */}
-          <div className="rounded-lg border border-gray-700 bg-[#0B0F1A] px-4 py-4">
-            <p className="text-xs uppercase tracking-wide text-gray-500 mb-3">6-Month Trend</p>
-            <div className="flex items-end gap-2 h-24">
-              {trend.map((t) => {
-                const heightPct = (t.total / trendMax) * 100;
-                const isCurrent = t.label === MONTHS[parseInt(filterMonthNum) - 1];
-                return (
-                  <div key={t.label} className="flex flex-col items-center gap-1 flex-1">
-                    <span className="text-[10px] text-gray-400">₱{t.total >= 1000 ? `${(t.total/1000).toFixed(1)}k` : t.total.toFixed(0)}</span>
-                    <div className="w-full rounded-t" style={{
-                      height: `${Math.max(4, heightPct)}%`,
-                      background: isCurrent ? "#10B981" : "#1E3A5F",
-                      transition: "height 0.3s",
-                    }} />
-                    <span className={`text-[10px] ${isCurrent ? "text-emerald-400 font-semibold" : "text-gray-500"}`}>{t.label}</span>
-                  </div>
-                );
-              })}
+          {/* Monthly trend line chart */}
+          <div className="mb-4 rounded-xl border border-cyan-700/40 bg-[#0B0F1A] px-4 py-4">
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <p className="text-xs uppercase tracking-wide text-cyan-300">6-Month Revenue Trend</p>
+              <div className="flex items-center gap-3 text-[11px] text-gray-400">
+                <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-emerald-500" />Booking</span>
+                <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-cyan-500" />Blocked</span>
+              </div>
             </div>
+            <ResponsiveContainer width="100%" height={300}>
+              <LineChart
+                data={revenueTrend}
+                margin={{ top: 5, right: 30, left: 0, bottom: 5 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
+                <XAxis 
+                  dataKey="label" 
+                  stroke="rgba(255,255,255,0.5)"
+                  style={{ fontSize: 12 }}
+                />
+                <YAxis 
+                  stroke="rgba(255,255,255,0.5)"
+                  style={{ fontSize: 12 }}
+                  tickFormatter={(value) => `₱${value >= 1000 ? (value / 1000).toFixed(0) + 'k' : value.toFixed(0)}`}
+                />
+                <Tooltip 
+                  contentStyle={{ 
+                    backgroundColor: "rgba(11, 15, 26, 0.95)", 
+                    border: "1px solid rgba(16, 185, 129, 0.3)",
+                    borderRadius: "8px"
+                  }}
+                  formatter={(value) => `₱${typeof value === 'number' ? value.toLocaleString('en-PH', { minimumFractionDigits: 0 }) : value}`}
+                  labelStyle={{ color: "#ccc" }}
+                />
+                <Legend 
+                  wrapperStyle={{ paddingTop: "20px" }}
+                  iconType="line"
+                />
+                <Line 
+                  type="monotone" 
+                  dataKey="bookingTotal" 
+                  stroke="#10B981" 
+                  strokeWidth={2}
+                  dot={{ fill: "#10B981", r: 4 }}
+                  activeDot={{ r: 6 }}
+                  name="Booking Revenue"
+                />
+                <Line 
+                  type="monotone" 
+                  dataKey="blockedTotal" 
+                  stroke="#06B6D4" 
+                  strokeWidth={2}
+                  dot={{ fill: "#06B6D4", r: 4 }}
+                  activeDot={{ r: 6 }}
+                  name="Blocked Revenue"
+                />
+                <Line 
+                  type="monotone" 
+                  dataKey="combinedTotal" 
+                  stroke="#8B5CF6" 
+                  strokeWidth={2}
+                  dot={{ fill: "#8B5CF6", r: 4 }}
+                  activeDot={{ r: 6 }}
+                  strokeDasharray="5 5"
+                  name="Total Revenue"
+                />
+              </LineChart>
+            </ResponsiveContainer>
           </div>
 
           {/* Per-court breakdown */}
