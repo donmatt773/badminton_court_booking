@@ -3,7 +3,10 @@ import React, { useEffect, useRef, useState, FC, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 
-import { BookingTable, type StatusTab } from './components/booking-table';
+import { BookingTable, type Booking, type StatusTab } from './components/booking-table';
+import { useCourtCatalog } from './components/use-court-names';
+import { getPusherClient } from '@/lib/client/pusher-client';
+import { REALTIME_CHANNELS, REALTIME_EVENTS } from '@/lib/shared/realtime-events';
 
 import { CourtTable } from './components/court-table';
 import { BlockedSlotManager } from './components/blocked-slot-manager';
@@ -144,6 +147,25 @@ function hoursFromTimes(start: string, end: string): number {
   const [sh] = start.split(":").map(Number);
   const [eh] = end.split(":").map(Number);
   return isNaN(sh) || isNaN(eh) ? 0 : Math.max(0, eh - sh);
+}
+
+function formatTime12h(time: string): string {
+  const [h, m] = time.split(":").map(Number);
+  if (isNaN(h) || isNaN(m)) {
+    return time;
+  }
+
+  const hour = h % 12 === 0 ? 12 : h % 12;
+  const ampm = h < 12 ? "AM" : "PM";
+  return `${hour}:${String(m).padStart(2, "0")} ${ampm}`;
+}
+
+function getBookingCustomerName(booking: Booking): string {
+  if (typeof booking.customer === "string") {
+    return booking.customer;
+  }
+
+  return booking.customer?.name ?? "Unknown customer";
 }
 
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
@@ -1001,6 +1023,8 @@ const TABS: Tab[] = [
   { key: 'profile', label: 'My Profile' },
 ];
 
+const SEEN_REQUEST_NOTIFICATIONS_STORAGE_KEY = "receptionist-seen-request-notifications";
+
 const ReceptionistDashboard: FC = () => {
   const [activeTab, setActiveTab] = useState<TabKey>('requests');
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -1011,10 +1035,175 @@ const ReceptionistDashboard: FC = () => {
   const [bookingActiveTab, setBookingActiveTab] = useState<StatusTab>("pending");
   const [bookingSelectedCount, setBookingSelectedCount] = useState(0);
   const [bookingSearchCustomer, setBookingSearchCustomer] = useState("");
+  const [showRequestNotifications, setShowRequestNotifications] = useState(false);
+  const [requestNotifications, setRequestNotifications] = useState<Booking[]>([]);
+  const [requestNotificationsSnapshot, setRequestNotificationsSnapshot] = useState<Booking[]>([]);
+  const [seenRequestNotificationIds, setSeenRequestNotificationIds] = useState<string[]>([]);
+  const [isLoadingRequestNotifications, setIsLoadingRequestNotifications] = useState(false);
+  const [requestNotificationsError, setRequestNotificationsError] = useState<string | null>(null);
   const [sessionUser, setSessionUser] = useState<SessionUser | null>(null);
   const archiveFnRef = useRef<(() => Promise<void>) | null>(null);
   const restoreFnRef = useRef<(() => Promise<void>) | null>(null);
+  const notificationPanelRef = useRef<HTMLDivElement | null>(null);
+  const courtCatalog = useCourtCatalog();
   const router = useRouter();
+
+  const seenRequestNotificationIdSet = useMemo(() => {
+    return new Set(seenRequestNotificationIds);
+  }, [seenRequestNotificationIds]);
+
+  const loadRequestNotifications = React.useCallback(async (): Promise<void> => {
+    if (activeTab !== "requests") {
+      return;
+    }
+
+    setIsLoadingRequestNotifications(true);
+    setRequestNotificationsError(null);
+
+    try {
+      const response = await fetch('/api/admin/bookings', { credentials: 'include' });
+      if (!response.ok) {
+        throw new Error('Failed to load booking requests');
+      }
+
+      const body = (await response.json()) as { data?: Booking[] };
+      setRequestNotifications(body.data ?? []);
+    } catch (error) {
+      setRequestNotificationsError(error instanceof Error ? error.message : 'Failed to load booking requests');
+    } finally {
+      setIsLoadingRequestNotifications(false);
+    }
+  }, [activeTab]);
+
+  const allPendingRequestNotifications = useMemo(() => {
+    return requestNotifications
+      .filter((booking) => booking.status.toUpperCase() === "PENDING" && !booking.isArchived)
+      .sort((left, right) => {
+        const leftDate = new Date(`${left.bookingDate}T${left.startTime}`).getTime();
+        const rightDate = new Date(`${right.bookingDate}T${right.startTime}`).getTime();
+        return rightDate - leftDate;
+      })
+      .slice(0, 8);
+  }, [requestNotifications]);
+
+  const unseenPendingRequestNotifications = useMemo(() => {
+    return allPendingRequestNotifications.filter((booking) => !seenRequestNotificationIdSet.has(booking._id));
+  }, [allPendingRequestNotifications, seenRequestNotificationIdSet]);
+
+  const pendingRequestCount = unseenPendingRequestNotifications.length;
+
+  function handleToggleRequestNotifications(): void {
+    if (showRequestNotifications) {
+      setShowRequestNotifications(false);
+      setRequestNotificationsSnapshot([]);
+      return;
+    }
+
+    setRequestNotificationsSnapshot(unseenPendingRequestNotifications);
+    setShowRequestNotifications(true);
+  }
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(SEEN_REQUEST_NOTIFICATIONS_STORAGE_KEY);
+      if (!raw) {
+        return;
+      }
+
+      const parsed = JSON.parse(raw) as unknown;
+      if (Array.isArray(parsed)) {
+        setSeenRequestNotificationIds(parsed.filter((value): value is string => typeof value === "string"));
+      }
+    } catch {
+      // Ignore malformed localStorage payload and continue with empty seen state.
+    }
+  }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      SEEN_REQUEST_NOTIFICATIONS_STORAGE_KEY,
+      JSON.stringify(seenRequestNotificationIds)
+    );
+  }, [seenRequestNotificationIds]);
+
+  useEffect(() => {
+    if (!showRequestNotifications) {
+      return;
+    }
+
+    function handleOutsideClick(event: MouseEvent): void {
+      if (!notificationPanelRef.current) {
+        return;
+      }
+
+      const target = event.target;
+      if (target instanceof Node && !notificationPanelRef.current.contains(target)) {
+        setShowRequestNotifications(false);
+      }
+    }
+
+    document.addEventListener("mousedown", handleOutsideClick);
+    return () => {
+      document.removeEventListener("mousedown", handleOutsideClick);
+    };
+  }, [showRequestNotifications]);
+
+  useEffect(() => {
+    if (!showRequestNotifications || requestNotificationsSnapshot.length === 0) {
+      return;
+    }
+
+    setSeenRequestNotificationIds((current) => {
+      const seenSet = new Set(current);
+      let changed = false;
+
+      for (const booking of requestNotificationsSnapshot) {
+        if (!seenSet.has(booking._id)) {
+          seenSet.add(booking._id);
+          changed = true;
+        }
+      }
+
+      return changed ? Array.from(seenSet) : current;
+    });
+  }, [showRequestNotifications, requestNotificationsSnapshot]);
+
+  useEffect(() => {
+    if (activeTab !== "requests") {
+      return;
+    }
+
+    void loadRequestNotifications();
+    const intervalId = window.setInterval(() => {
+      void loadRequestNotifications();
+    }, 30000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [activeTab, loadRequestNotifications]);
+
+  useEffect(() => {
+    if (activeTab !== "requests") {
+      return;
+    }
+
+    const pusher = getPusherClient();
+    if (!pusher) {
+      return;
+    }
+
+    const channel = pusher.subscribe(REALTIME_CHANNELS.bookings);
+    const handleBookingRealtimeUpdate = () => {
+      void loadRequestNotifications();
+    };
+
+    channel.bind(REALTIME_EVENTS.updated, handleBookingRealtimeUpdate);
+
+    return () => {
+      channel.unbind(REALTIME_EVENTS.updated, handleBookingRealtimeUpdate);
+    };
+  }, [activeTab, loadRequestNotifications]);
 
   async function checkSession(): Promise<void> {
     try {
@@ -1077,7 +1266,63 @@ const ReceptionistDashboard: FC = () => {
       >
         <div className="flex items-center justify-between gap-3 border-b border-gray-700 pb-2 mb-3 flex-wrap">
           <div className="flex items-center gap-3 flex-wrap">
-            <div className="text-lg font-semibold text-gray-200">Booking Management</div>
+            <div className="flex items-center gap-2">
+              <div className="text-lg font-semibold text-gray-200">Booking Management</div>
+              <div className="relative" ref={notificationPanelRef}>
+                <button
+                  type="button"
+                  onClick={handleToggleRequestNotifications}
+                  className="relative inline-flex h-9 w-9 items-center justify-center rounded-lg border border-gray-700 bg-[#1F2937] text-gray-300 transition hover:border-emerald-500 hover:text-emerald-300"
+                  aria-label="Open booking notifications"
+                  title="Booking notifications"
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 17h5l-1.4-1.4A2 2 0 0 1 18 14.2V11a6 6 0 1 0-12 0v3.2c0 .53-.21 1.04-.59 1.4L4 17h5m6 0H9m6 0a3 3 0 1 1-6 0" />
+                  </svg>
+                  {pendingRequestCount > 0 && (
+                    <span className="absolute -right-1 -top-1 min-w-5 rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-semibold text-white leading-none">
+                      {pendingRequestCount > 9 ? "9+" : pendingRequestCount}
+                    </span>
+                  )}
+                </button>
+
+                {showRequestNotifications && (
+                  <div className="absolute left-0 top-11 z-20 w-[min(22rem,calc(100vw-2rem))] overflow-hidden rounded-xl border border-gray-700 bg-[#0B0F1A] shadow-2xl">
+                    <div className="border-b border-gray-700 px-3 py-2">
+                      <p className="text-sm font-semibold text-gray-100">New Booking Requests</p>
+                      <p className="text-xs text-gray-500">Customer, court, and timeslot</p>
+                    </div>
+                    {isLoadingRequestNotifications ? (
+                      <p className="px-3 py-3 text-sm text-gray-400">Loading notifications...</p>
+                    ) : requestNotificationsError ? (
+                      <p className="px-3 py-3 text-sm text-red-400">{requestNotificationsError}</p>
+                    ) : requestNotificationsSnapshot.length === 0 ? (
+                      <p className="px-3 py-3 text-sm text-gray-400">No new requests right now.</p>
+                    ) : (
+                      <ul className="max-h-80 overflow-y-auto">
+                        {requestNotificationsSnapshot.map((booking) => {
+                          const customerName = getBookingCustomerName(booking);
+                          const courtName = courtCatalog[booking.courtId]?.name ?? booking.courtId;
+                          const timeSlot = `${formatTime12h(booking.startTime)} - ${formatTime12h(booking.endTime)}`;
+                          return (
+                            <li key={booking._id} className="border-b border-gray-800 px-3 py-2 last:border-0">
+                              <div className="mb-1 flex items-center justify-between gap-2">
+                                <p className="text-sm font-medium text-gray-100">{customerName}</p>
+                                <span className="rounded-full border border-amber-500/40 bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200">
+                                  Not seen
+                                </span>
+                              </div>
+                              <p className="text-xs text-gray-400">Court: {courtName}</p>
+                              <p className="text-xs text-gray-400">Timeslot: {timeSlot}</p>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
             <input
               type="text"
               value={bookingSearchCustomer}

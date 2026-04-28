@@ -363,8 +363,14 @@ export function BlockedSlotManager() {
   );
 
   const groupBeginEligibleCount = useMemo(
-    () => groupModalSlots.filter((slot) => !slot.sessionStartedAt && slot.bookingDate <= today).length,
-    [groupModalSlots, today]
+    () =>
+      groupModalSlots.filter(
+        (slot) =>
+          !slot.sessionStartedAt &&
+          slot.bookingDate <= today &&
+          (slot.bookingDate < today || nowTime >= slot.startTime)
+      ).length,
+    [groupModalSlots, today, nowTime]
   );
 
   const groupEndEligibleCount = useMemo(
@@ -672,9 +678,15 @@ export function BlockedSlotManager() {
     setSuccessMessage(null);
     setGroupSessionAction(action);
 
+    const currentTime = currentTimeHHMM();
     const targets =
       action === "begin"
-        ? groupModalSlots.filter((slot) => !slot.sessionStartedAt && slot.bookingDate <= today)
+        ? groupModalSlots.filter(
+            (slot) =>
+              !slot.sessionStartedAt &&
+              slot.bookingDate <= today &&
+              (slot.bookingDate < today || currentTime >= slot.startTime)
+          )
         : groupModalSlots.filter((slot) => !!slot.sessionStartedAt && !slot.sessionEndedAt);
 
     if (targets.length === 0) {

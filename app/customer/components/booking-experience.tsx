@@ -58,6 +58,13 @@ type BookingInput = {
   paymentReference?: string;
 };
 
+type SuccessModalSummary = {
+  courts: string[];
+  bookingDate: string;
+  startTime: string;
+  endTime: string;
+};
+
 // ---------------------------------------------------------------------------
 // Time configuration
 // ---------------------------------------------------------------------------
@@ -345,6 +352,8 @@ export default function BookingExperience() {
   const [submissionErrorMessage, setSubmissionErrorMessage] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isSuccessModalOpen, setIsSuccessModalOpen] = useState(false);
+  const [successSummary, setSuccessSummary] = useState<SuccessModalSummary | null>(null);
   const [reservationStep, setReservationStep] = useState<1 | 2>(1);
   const [isSubmittingRequest, setIsSubmittingRequest] = useState(false);
   const [courtsPage, setCourtsPage] = useState(1);
@@ -493,6 +502,21 @@ export default function BookingExperience() {
     };
   }, [isModalOpen]);
 
+  // Close success modal on Escape
+  useEffect(() => {
+    if (!isSuccessModalOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setIsSuccessModalOpen(false);
+    };
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = "";
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [isSuccessModalOpen]);
+
   // -------------------------------------------------------------------------
   function openModal(courtId: string) {
     setSelectedCourtIds([courtId]);
@@ -571,8 +595,15 @@ export default function BookingExperience() {
           })
         )
       );
+      setSuccessSummary({
+        courts: selectedCourts.map((court) => court.name),
+        bookingDate: form.bookingDate,
+        startTime: form.startTime,
+        endTime: form.endTime,
+      });
       setStatusMessage("Reservation submitted successfully. Please wait for receptionist approval before sending payment screenshot via Messenger.");
       setIsModalOpen(false);
+      setIsSuccessModalOpen(true);
       await refetch();
     } catch (error) {
       setSubmissionErrorMessage(getErrorMessage(error, "Booking could not be submitted."));
@@ -1678,6 +1709,126 @@ export default function BookingExperience() {
                 Pending admin approval · confirmation sent to your email
               </p>
             </form>
+          </section>
+        </div>
+      )}
+
+      {/* ── SUCCESS MODAL ── */}
+      {isSuccessModalOpen && (
+        <div
+          onClick={() => setIsSuccessModalOpen(false)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 60,
+            background: "rgba(0,0,0,0.45)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "12px",
+          }}
+        >
+          <section
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "100%",
+              maxWidth: "min(520px, calc(100vw - 24px))",
+              background: "var(--color-background-primary)",
+              border: "1px solid rgba(16,185,129,0.25)",
+              borderRadius: "var(--border-radius-lg)",
+              padding: "18px 16px",
+              boxSizing: "border-box",
+              boxShadow: "0 24px 64px rgba(0,0,0,0.5), 0 4px 16px rgba(0,0,0,0.3)",
+              display: "grid",
+              gap: 12,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span
+                style={{
+                  width: 28,
+                  height: 28,
+                  borderRadius: "50%",
+                  display: "grid",
+                  placeItems: "center",
+                  background: "rgba(16,185,129,0.2)",
+                  color: "#A7F3D0",
+                  fontSize: 15,
+                  fontWeight: 700,
+                  flexShrink: 0,
+                }}
+              >
+                ✓
+              </span>
+              <div>
+                <p style={{ margin: "0 0 2px", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: "#6EE7B7" }}>
+                  Booking request sent
+                </p>
+                <h3 style={{ margin: 0, fontSize: 17, fontWeight: 600, color: "var(--color-text-primary)" }}>
+                  Reservation submitted successfully
+                </h3>
+              </div>
+            </div>
+
+            <p
+              style={{
+                margin: 0,
+                padding: "10px 12px",
+                borderRadius: "var(--border-radius-md)",
+                background: "rgba(16,185,129,0.10)",
+                border: "1px solid rgba(16,185,129,0.22)",
+                fontSize: 13,
+                color: "#A7F3D0",
+                lineHeight: 1.6,
+              }}
+            >
+              {statusMessage || "Your reservation request has been sent. Please wait for receptionist approval before sending payment screenshot via Messenger."}
+            </p>
+
+            {successSummary && (
+              <div
+                style={{
+                  borderRadius: "var(--border-radius-md)",
+                  border: "1px solid var(--color-border-tertiary)",
+                  background: "var(--color-background-secondary)",
+                  padding: "10px 12px",
+                  display: "grid",
+                  gap: 6,
+                }}
+              >
+                <p style={{ margin: 0, fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--color-text-secondary)" }}>
+                  Booking details
+                </p>
+                <p style={{ margin: 0, fontSize: 13, color: "var(--color-text-primary)" }}>
+                  Court{successSummary.courts.length !== 1 ? "s" : ""}: {successSummary.courts.join(", ")}
+                </p>
+                <p style={{ margin: 0, fontSize: 13, color: "var(--color-text-primary)" }}>
+                  Date: {successSummary.bookingDate}
+                </p>
+                <p style={{ margin: 0, fontSize: 13, color: "var(--color-text-primary)" }}>
+                  Timeslot: {formatHour(successSummary.startTime)} - {formatHour(successSummary.endTime)}
+                </p>
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={() => setIsSuccessModalOpen(false)}
+              style={{
+                width: "100%",
+                padding: "11px",
+                fontSize: 14,
+                fontWeight: 600,
+                borderRadius: "var(--border-radius-md)",
+                border: "none",
+                cursor: "pointer",
+                background: "linear-gradient(135deg, #10B981, #059669)",
+                color: "#ffffff",
+                boxShadow: "0 3px 16px rgba(16,185,129,0.35)",
+              }}
+            >
+              Done
+            </button>
           </section>
         </div>
       )}

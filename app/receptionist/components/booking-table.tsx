@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useRef, useState, FC } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState, FC } from "react";
 import { useCourtCatalog } from "./use-court-names";
 import { getPusherClient } from "@/lib/client/pusher-client";
 import { REALTIME_CHANNELS, REALTIME_EVENTS } from "@/lib/shared/realtime-events";
@@ -327,6 +327,19 @@ function sortBookings(bookings: Booking[]): Booking[] {
     const dateB = `${b.bookingDate}T${b.startTime}`;
     return dateA.localeCompare(dateB);
   });
+}
+
+function getEffectiveStatus(booking: Booking, nowMs: number): string {
+  if (booking.status !== "PENDING") {
+    return booking.status;
+  }
+
+  const expiresAtMs = new Date(booking.expiresAt).getTime();
+  if (!Number.isNaN(expiresAtMs) && expiresAtMs <= nowMs) {
+    return "EXPIRED";
+  }
+
+  return booking.status;
 }
 
 // ---------------------------------------------------------------------------
@@ -1213,6 +1226,41 @@ function useCountdown(targetTimeMs: number | null): number {
   return targetTimeMs === null ? 0 : targetTimeMs - now;
 }
 
+const PendingExpiryTimer: FC<{ expiresAt: string }> = ({ expiresAt }) => {
+  const targetMs = new Date(expiresAt).getTime();
+  const countdownMs = useCountdown(Number.isNaN(targetMs) ? null : targetMs);
+
+  if (Number.isNaN(targetMs)) {
+    return null;
+  }
+
+  if (countdownMs <= 0) {
+    return (
+      <span className="mt-1 inline-flex items-center gap-1 rounded-full border border-red-500/60 bg-red-900/20 px-2 py-0.5 text-[11px] font-semibold text-red-300">
+        Pending expired
+      </span>
+    );
+  }
+
+  const totalSeconds = Math.floor(countdownMs / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const display =
+    hours > 0
+      ? `${hours}:${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`
+      : `${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
+
+  const colorClass =
+    totalSeconds < 600 ? "text-red-300 border-red-500/60 bg-red-900/20" : totalSeconds < 1800 ? "text-amber-300 border-amber-500/60 bg-amber-900/20" : "text-emerald-300 border-emerald-500/60 bg-emerald-900/20";
+
+  return (
+    <span className={`mt-1 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold font-mono ${colorClass}`}>
+      Expires in {display}
+    </span>
+  );
+};
+
 const CourtTimer: FC<{ sessionStartedAt: string; startTime: string; endTime: string; onExpired?: () => void }> = ({ sessionStartedAt, startTime, endTime, onExpired }) => {
   const durationMs = Math.max(0, (toMinutes(endTime) - toMinutes(startTime)) * 60 * 1000);
   const targetTimeMs = durationMs > 0 ? new Date(sessionStartedAt).getTime() + durationMs : null;
@@ -1545,6 +1593,15 @@ const BookingActions: FC<BookingActionsProps> = ({
     status: string,
     extra: Record<string, unknown> = {}
   ): Promise<void> {
+    if (booking.status === "PENDING") {
+      const expiresAtMs = new Date(booking.expiresAt).getTime();
+      if (!Number.isNaN(expiresAtMs) && expiresAtMs <= Date.now()) {
+        setActionError("This pending request already expired and can no longer be changed.");
+        onActionComplete();
+        return;
+      }
+    }
+
     await updateBooking({ status, ...extra });
   }
 
@@ -1619,7 +1676,7 @@ const BookingActions: FC<BookingActionsProps> = ({
                 : "bg-amber-500 text-black hover:bg-amber-400"
             }`}
           >
-            {isSessionRunning ? "End" : "Start"}
+            {isSessionRunning ? "End" : "Arrive"}
           </button>
         )}
         {isPaid && (
@@ -1730,6 +1787,7 @@ const StatusTabs: FC<StatusTabsProps> = ({ activeTab, counts, onChange }) => (
 // ---------------------------------------------------------------------------
 export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef, restoreFnRef, onSelectionChange, searchCustomer = "", externalActiveTab, currentStaffName }) => {
   const [bookings, setBookings] = useState<Booking[]>([]);
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const [loading, setLoading]   = useState(true);
   const [error, setError]       = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<StatusTab>("pending");
@@ -1738,11 +1796,27 @@ export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef,
   const [archiving, setArchiving] = useState(false);
   const [sortKey, setSortKey] = useState<"customer" | "contact" | "court" | "date" | "time" | "status">("date");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
+  const [archivedPage, setArchivedPage] = useState(1);
+  const ARCHIVED_PAGE_SIZE = 10;
   const [selectedPaymentBooking, setSelectedPaymentBooking] = useState<Booking | null>(null);
   const courtCatalog             = useCourtCatalog();
   const courtNames               = Object.fromEntries(Object.entries(courtCatalog).map(([id, value]) => [id, value.name]));
   const initializedPendingIdsRef = useRef(false);
   const knownPendingIdsRef = useRef<Set<string>>(new Set());
+  const effectiveBookings = useMemo(
+    () => bookings.map((booking) => ({ ...booking, status: getEffectiveStatus(booking, nowMs) })),
+    [bookings, nowMs]
+  );
+
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      setNowMs(Date.now());
+    }, 1000);
+
+    return () => {
+      window.clearInterval(id);
+    };
+  }, []);
 
   const fetchBookings = useCallback(async (): Promise<void> => {
     setLoading(true);
@@ -1762,6 +1836,7 @@ export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef,
   function handleTabChange(tab: StatusTab) {
     setActiveTab(tab);
     setSelectedIds(new Set());
+    setArchivedPage(1);
     onTabChange?.(tab);
     onSelectionChange?.(0);
   }
@@ -1773,8 +1848,13 @@ export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef,
 
     setActiveTab(externalActiveTab);
     setSelectedIds(new Set());
+    setArchivedPage(1);
     onSelectionChange?.(0);
   }, [activeTab, externalActiveTab, onSelectionChange]);
+
+  useEffect(() => {
+    setArchivedPage(1);
+  }, [searchCustomer]);
 
   async function archiveSelected(): Promise<void> {
     if (selectedIds.size === 0) return;
@@ -1847,7 +1927,6 @@ export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef,
 
     return () => {
       channel.unbind(REALTIME_EVENTS.updated, handleUpdate);
-      pusher.unsubscribe(REALTIME_CHANNELS.bookings);
     };
   }, [fetchBookings]);
 
@@ -1904,11 +1983,11 @@ export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef,
       const group = TAB_GROUPS[key];
       let count: number;
       if (key === "archived") {
-        count = bookings.filter((b) => b.isArchived === true || b.status === "ARCHIVED").length;
+        count = effectiveBookings.filter((b) => b.isArchived === true || b.status === "ARCHIVED").length;
       } else if (key === "all") {
-        count = bookings.filter((b) => !b.isArchived && b.status !== "ARCHIVED").length;
+        count = effectiveBookings.filter((b) => !b.isArchived && b.status !== "ARCHIVED").length;
       } else {
-        count = bookings.filter((b) => group.includes(b.status) && !b.isArchived && b.status !== "ARCHIVED").length;
+        count = effectiveBookings.filter((b) => group.includes(b.status) && !b.isArchived && b.status !== "ARCHIVED").length;
       }
       return [key, count];
     })
@@ -1917,10 +1996,10 @@ export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef,
   // Filter + sort
   const tabBookings = sortBookings(
     activeTab === "archived"
-      ? bookings.filter((b) => b.isArchived === true || b.status === "ARCHIVED")
+      ? effectiveBookings.filter((b) => b.isArchived === true || b.status === "ARCHIVED")
       : activeTab === "all"
-      ? bookings.filter((b) => !b.isArchived && b.status !== "ARCHIVED")
-      : bookings.filter((b) => TAB_GROUPS[activeTab].includes(b.status) && !b.isArchived && b.status !== "ARCHIVED")
+      ? effectiveBookings.filter((b) => !b.isArchived && b.status !== "ARCHIVED")
+      : effectiveBookings.filter((b) => TAB_GROUPS[activeTab].includes(b.status) && !b.isArchived && b.status !== "ARCHIVED")
   );
 
   const visibleBookings = [...tabBookings]
@@ -1993,6 +2072,11 @@ export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef,
       ? visibleBookings.filter((b) => b.isArchived === true || b.status === "ARCHIVED")
       : visibleBookings.filter((b) => archivableStatuses.includes(b.status) && !b.isArchived);
   const allSelectableSelected = selectableVisible.length > 0 && selectableVisible.every((b) => selectedIds.has(b._id));
+
+  const archivedTotalPages = activeTab === "archived" ? Math.max(1, Math.ceil(visibleBookings.length / ARCHIVED_PAGE_SIZE)) : 1;
+  const pagedBookings = activeTab === "archived"
+    ? visibleBookings.slice((archivedPage - 1) * ARCHIVED_PAGE_SIZE, archivedPage * ARCHIVED_PAGE_SIZE)
+    : visibleBookings;
 
   return (
     <div className="w-full max-w-7xl mx-auto">
@@ -2102,7 +2186,7 @@ export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef,
                 </td>
               </tr>
             )}
-            {visibleBookings.map((b) => {
+            {pagedBookings.map((b) => {
               const customer =
                 typeof b.customer === "object"
                   ? b.customer
@@ -2175,6 +2259,7 @@ export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef,
                   <td className="px-4 py-3 text-gray-300 whitespace-nowrap">{b.bookingDate}</td>
                   <td className="px-4 py-3 text-gray-300 whitespace-nowrap">
                     <div>{formatTime12h(b.startTime)} – {formatTime12h(b.endTime)}</div>
+                    {b.status === "PENDING" && <PendingExpiryTimer expiresAt={b.expiresAt} />}
                     {b.sessionStartedAt && (
                       <div className="mt-1 text-[11px] text-emerald-300">
                         Started: {new Date(b.sessionStartedAt).toLocaleString()}
@@ -2190,14 +2275,6 @@ export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef,
                           const court = courtNames[b.courtId] || b.courtId;
                           const label = `⏰ ${customer}'s session on ${court} has ended (${b.bookingDate} ${formatTime12h(b.startTime)}–${formatTime12h(b.endTime)}). Please clear the court.`;
                           playExpiryAlert();
-                          void fetch(`/api/admin/bookings/${b._id}`, {
-                            method: "PUT",
-                            credentials: "include",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ status: "COMPLETE", endSession: true }),
-                          }).finally(() => {
-                            void fetchBookings();
-                          });
                           setExpiredNotices((prev) =>
                             prev.some((n) => n.id === b._id)
                               ? prev
@@ -2267,6 +2344,73 @@ export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef,
           </tbody>
         </table>
       </div>
+
+      {activeTab === "archived" && archivedTotalPages > 1 && (
+        <div className="mt-3 flex items-center justify-between gap-2 flex-wrap">
+          <span className="text-xs text-gray-400">
+            Page {archivedPage} of {archivedTotalPages} &mdash; {visibleBookings.length} records
+          </span>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              disabled={archivedPage <= 1}
+              onClick={() => setArchivedPage(1)}
+              className="px-2 py-1 text-xs rounded bg-[#1F2937] border border-gray-700 text-gray-300 hover:bg-gray-700 disabled:opacity-40"
+            >
+              «
+            </button>
+            <button
+              type="button"
+              disabled={archivedPage <= 1}
+              onClick={() => setArchivedPage((p) => p - 1)}
+              className="px-2.5 py-1 text-xs rounded bg-[#1F2937] border border-gray-700 text-gray-300 hover:bg-gray-700 disabled:opacity-40"
+            >
+              ‹ Prev
+            </button>
+            {Array.from({ length: archivedTotalPages }, (_, i) => i + 1)
+              .filter((p) => p === 1 || p === archivedTotalPages || Math.abs(p - archivedPage) <= 2)
+              .reduce<(number | "...")[]>((acc, p, idx, arr) => {
+                if (idx > 0 && (p as number) - (arr[idx - 1] as number) > 1) acc.push("...");
+                acc.push(p);
+                return acc;
+              }, [])
+              .map((item, idx) =>
+                item === "..." ? (
+                  <span key={`ellipsis-${idx}`} className="px-1.5 text-xs text-gray-500">…</span>
+                ) : (
+                  <button
+                    key={item}
+                    type="button"
+                    onClick={() => setArchivedPage(item as number)}
+                    className={`px-2.5 py-1 text-xs rounded border ${
+                      archivedPage === item
+                        ? "bg-emerald-600 border-emerald-500 text-white font-semibold"
+                        : "bg-[#1F2937] border-gray-700 text-gray-300 hover:bg-gray-700"
+                    }`}
+                  >
+                    {item}
+                  </button>
+                )
+              )}
+            <button
+              type="button"
+              disabled={archivedPage >= archivedTotalPages}
+              onClick={() => setArchivedPage((p) => p + 1)}
+              className="px-2.5 py-1 text-xs rounded bg-[#1F2937] border border-gray-700 text-gray-300 hover:bg-gray-700 disabled:opacity-40"
+            >
+              Next ›
+            </button>
+            <button
+              type="button"
+              disabled={archivedPage >= archivedTotalPages}
+              onClick={() => setArchivedPage(archivedTotalPages)}
+              className="px-2 py-1 text-xs rounded bg-[#1F2937] border border-gray-700 text-gray-300 hover:bg-gray-700 disabled:opacity-40"
+            >
+              »
+            </button>
+          </div>
+        </div>
+      )}
 
       {selectedPaymentBooking && (
         <PaymentDetailsModal
