@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { ConfirmModal } from "./confirm-modal";
 import { getPusherClient } from "@/lib/client/pusher-client";
 import { REALTIME_CHANNELS, REALTIME_EVENTS } from "@/lib/shared/realtime-events";
 import { isValidBlockedSlotTimeRange } from "@/lib/shared/blocked-slot-time";
@@ -165,6 +166,14 @@ type NewBlockForm = {
   reason: string;
 };
 
+type ConfirmDialogState = {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  cancelLabel: string;
+  danger?: boolean;
+};
+
 export function BlockedSlotManager() {
   const [courts, setCourts] = useState<Court[]>([]);
   const [blockedSlots, setBlockedSlots] = useState<BlockedSlot[]>([]);
@@ -173,6 +182,7 @@ export function BlockedSlotManager() {
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [popupMessage, setPopupMessage] = useState<string | null>(null);
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null);
   const [sessionActionId, setSessionActionId] = useState<string | null>(null);
   const [groupSessionAction, setGroupSessionAction] = useState<"begin" | "end" | null>(null);
   const [sessionRecordDate, setSessionRecordDate] = useState<string>("all");
@@ -190,7 +200,9 @@ export function BlockedSlotManager() {
     reason: "",
   });
   const [isGroupEditSaving, setIsGroupEditSaving] = useState(false);
+  const [isGroupDeleting, setIsGroupDeleting] = useState(false);
   const [groupEditError, setGroupEditError] = useState<string | null>(null);
+  const confirmResolverRef = useRef<((value: boolean) => void) | null>(null);
 
   const today = todayISODate();
   const nowTime = currentTimeHHMM();
@@ -362,20 +374,25 @@ export function BlockedSlotManager() {
     [groupModalDailyBreakdown]
   );
 
+  const groupModalMonitorSlots = useMemo(
+    () => groupModalSlots.filter((slot) => blockedSlotSessionLabel(slot, today) !== "closed"),
+    [groupModalSlots, today]
+  );
+
   const groupBeginEligibleCount = useMemo(
     () =>
-      groupModalSlots.filter(
+      groupModalMonitorSlots.filter(
         (slot) =>
           !slot.sessionStartedAt &&
           slot.bookingDate <= today &&
           (slot.bookingDate < today || nowTime >= slot.startTime)
       ).length,
-    [groupModalSlots, today, nowTime]
+    [groupModalMonitorSlots, today, nowTime]
   );
 
   const groupEndEligibleCount = useMemo(
-    () => groupModalSlots.filter((slot) => !!slot.sessionStartedAt && !slot.sessionEndedAt).length,
-    [groupModalSlots]
+    () => groupModalMonitorSlots.filter((slot) => !!slot.sessionStartedAt && !slot.sessionEndedAt).length,
+    [groupModalMonitorSlots]
   );
 
   const groupModalLockedCourtIds = useMemo(
@@ -462,6 +479,29 @@ export function BlockedSlotManager() {
     };
   }, []);
 
+  useEffect(() => {
+    return () => {
+      if (confirmResolverRef.current) {
+        confirmResolverRef.current(false);
+        confirmResolverRef.current = null;
+      }
+    };
+  }, []);
+
+  function closeConfirmDialog(result: boolean): void {
+    const resolve = confirmResolverRef.current;
+    confirmResolverRef.current = null;
+    setConfirmDialog(null);
+    resolve?.(result);
+  }
+
+  function requestConfirmation(dialog: ConfirmDialogState): Promise<boolean> {
+    return new Promise((resolve) => {
+      confirmResolverRef.current = resolve;
+      setConfirmDialog(dialog);
+    });
+  }
+
   async function handleCreateBlock(event: React.FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
 
@@ -506,9 +546,12 @@ export function BlockedSlotManager() {
           : form.mode === "monthly"
             ? "monthly recurring"
             : "yearly recurring";
-      const confirmed = window.confirm(
-        `You selected ${modeLabel} mode with ${form.courtIds.length} court(s). This will create ${form.courtIds.length} active record(s) and apply recurring blocking across ${bookingDates.length} date(s) (${firstDate} to ${lastDate}). Session records are generated one-by-one as sessions are processed. Continue?`
-      );
+      const confirmed = await requestConfirmation({
+        title: "Confirm Recurring Block",
+        message: `You selected ${modeLabel} mode with ${form.courtIds.length} court(s). This will create ${form.courtIds.length} active record(s) and apply recurring blocking across ${bookingDates.length} date(s) (${firstDate} to ${lastDate}). Session records are generated one-by-one as sessions are processed. Continue?`,
+        confirmLabel: "Yes, Create Records",
+        cancelLabel: "Cancel",
+      });
 
       if (!confirmed) {
         return;
@@ -601,6 +644,66 @@ export function BlockedSlotManager() {
     }
   }
 
+  async function handleDeleteGroup(): Promise<void> {
+    if (!groupModalKey || groupModalSlots.length === 0 || isGroupDeleting) {
+      return;
+    }
+
+    const confirmed = await requestConfirmation({
+      title: "Delete Blocking Group",
+      message: `Delete this blocking group permanently? This will remove ${groupModalSlots.length} record(s) and cannot be undone.`,
+      confirmLabel: "Delete Permanently",
+      cancelLabel: "Cancel",
+      danger: true,
+    });
+
+    if (!confirmed) {
+      return;
+    }
+
+    setError(null);
+    setSuccessMessage(null);
+    setIsGroupDeleting(true);
+
+    let failed = 0;
+    let firstFailureMessage: string | null = null;
+
+    for (const slot of groupModalSlots) {
+      try {
+        const response = await fetch(`/api/admin/blocked-slots/${slot._id}`, {
+          method: "DELETE",
+        });
+
+        if (!response.ok && response.status !== 404) {
+          failed += 1;
+          if (!firstFailureMessage) {
+            const body = (await response.json().catch(() => null)) as
+              | { error?: { message?: string } }
+              | null;
+            firstFailureMessage = body?.error?.message ?? "Failed to delete one or more blocked records";
+          }
+        }
+      } catch {
+        failed += 1;
+        if (!firstFailureMessage) {
+          firstFailureMessage = "Network error while deleting blocked records";
+        }
+      }
+    }
+
+    await loadData();
+
+    if (failed > 0) {
+      setError(firstFailureMessage ?? "Failed to delete one or more blocked records");
+      setSuccessMessage(`Deleted ${groupModalSlots.length - failed} record(s). ${failed} failed.`);
+    } else {
+      setSuccessMessage(`Deleted ${groupModalSlots.length} blocked record(s) permanently.`);
+      setGroupModalKey(null);
+    }
+
+    setIsGroupDeleting(false);
+  }
+
   async function handleSessionAction(slot: BlockedSlot, action: "begin" | "end"): Promise<void> {
     setError(null);
     setSuccessMessage(null);
@@ -679,26 +782,49 @@ export function BlockedSlotManager() {
     setGroupSessionAction(action);
 
     const currentTime = currentTimeHHMM();
+    const beginCandidates = groupModalMonitorSlots.filter((slot) => !slot.sessionStartedAt && slot.bookingDate <= today);
     const targets =
       action === "begin"
-        ? groupModalSlots.filter(
+        ? beginCandidates.filter(
             (slot) =>
-              !slot.sessionStartedAt &&
-              slot.bookingDate <= today &&
               (slot.bookingDate < today || currentTime >= slot.startTime)
           )
-        : groupModalSlots.filter((slot) => !!slot.sessionStartedAt && !slot.sessionEndedAt);
+        : groupModalMonitorSlots.filter((slot) => !!slot.sessionStartedAt && !slot.sessionEndedAt);
 
     if (targets.length === 0) {
       setGroupSessionAction(null);
+      if (action === "begin") {
+        if (beginCandidates.some((slot) => slot.bookingDate === today)) {
+          const nextTodayStart = beginCandidates
+            .filter((slot) => slot.bookingDate === today && currentTime < slot.startTime)
+            .map((slot) => slot.startTime)
+            .sort()[0];
+
+          setPopupMessage(
+            nextTodayStart
+              ? `Cannot begin yet. Earliest configured start time is ${formatTime12h(nextTodayStart)}.`
+              : "Cannot begin yet. Please wait for the configured session start time."
+          );
+          return;
+        }
+
+        if (groupModalMonitorSlots.some((slot) => !slot.sessionStartedAt && slot.bookingDate > today)) {
+          setPopupMessage("Cannot begin yet. This group is scheduled for a future date.");
+          return;
+        }
+      }
       setError(action === "begin" ? "No eligible records to begin." : "No running records to stop.");
       return;
     }
 
     const actionLabel = action === "begin" ? "start" : "stop";
-    const confirmed = window.confirm(
-      `This will ${actionLabel} ${targets.length} record(s) for this group. Continue?`
-    );
+    const confirmed = await requestConfirmation({
+      title: `${action === "begin" ? "Start" : "Stop"} Group Sessions`,
+      message: `This will ${actionLabel} ${targets.length} record(s) for this group. Continue?`,
+      confirmLabel: action === "begin" ? "Start Sessions" : "Stop Sessions",
+      cancelLabel: "Cancel",
+      danger: action !== "begin",
+    });
 
     if (!confirmed) {
       setGroupSessionAction(null);
@@ -1111,15 +1237,20 @@ export function BlockedSlotManager() {
       ) : null}
 
       {popupMessage ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-md rounded-xl bg-[#1F2937] p-5 shadow-2xl">
-            <h3 className="mb-2 text-lg font-semibold text-gray-100">Blocking Notice</h3>
-            <p className="mb-4 text-sm text-gray-300">{popupMessage}</p>
+        <div className="fixed inset-0 z-70 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-sm rounded-xl border border-red-500/40 bg-[#1F2937] p-6 shadow-xl">
+            <div className="mb-4 flex items-start gap-3">
+              <span className="mt-0.5 text-xl text-red-500">⚠</span>
+              <div>
+                <p className="mb-1 text-sm font-semibold text-red-400">Action Failed</p>
+                <p className="text-sm text-gray-300">{popupMessage}</p>
+              </div>
+            </div>
             <div className="flex justify-end">
               <button
                 type="button"
                 onClick={() => setPopupMessage(null)}
-                className="px-4 py-2 rounded-lg bg-[#10B981] text-white text-sm font-semibold hover:bg-[#059669]"
+                className="rounded-lg bg-red-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-red-700"
               >
                 OK
               </button>
@@ -1127,6 +1258,18 @@ export function BlockedSlotManager() {
           </div>
         </div>
       ) : null}
+
+      <ConfirmModal
+        isOpen={Boolean(confirmDialog)}
+        overlayClassName="z-75"
+        title={confirmDialog?.title ?? "Confirm Action"}
+        message={confirmDialog?.message ?? ""}
+        cancelLabel={confirmDialog?.cancelLabel ?? "Cancel"}
+        confirmLabel={confirmDialog?.confirmLabel ?? "Confirm"}
+        danger={confirmDialog?.danger ?? false}
+        onCancel={() => closeConfirmDialog(false)}
+        onConfirm={() => closeConfirmDialog(true)}
+      />
 
       {groupModalKey ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
@@ -1142,13 +1285,23 @@ export function BlockedSlotManager() {
                 <button
                   type="button"
                   onClick={handleOpenGroupEdit}
+                  disabled={isGroupDeleting}
                   className="rounded border border-amber-600/50 bg-amber-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-amber-700"
                 >
                   Edit Blocking Details
                 </button>
                 <button
                   type="button"
+                  onClick={() => void handleDeleteGroup()}
+                  disabled={isGroupDeleting}
+                  className="rounded border border-red-600/50 bg-red-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-60"
+                >
+                  {isGroupDeleting ? "Deleting..." : "Delete Permanently"}
+                </button>
+                <button
+                  type="button"
                   onClick={() => setGroupModalKey(null)}
+                  disabled={isGroupDeleting}
                   className="rounded border border-gray-600 bg-[#111827] px-2.5 py-1 text-xs font-semibold text-gray-300 hover:border-gray-500"
                 >
                   Close
@@ -1215,7 +1368,7 @@ export function BlockedSlotManager() {
                 <div className="mb-3 flex flex-wrap items-center gap-2">
                   <button
                     type="button"
-                    disabled={groupSessionAction !== null || groupBeginEligibleCount === 0}
+                    disabled={groupSessionAction !== null}
                     onClick={() => void handleGroupSessionAction("begin")}
                     className="px-2.5 py-1 rounded bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 disabled:opacity-60"
                   >
@@ -1230,8 +1383,8 @@ export function BlockedSlotManager() {
                     {groupSessionAction === "end" ? "Stopping..." : `Stop All (${groupEndEligibleCount})`}
                   </button>
                 </div>
-                {groupModalSlots.length === 0 ? (
-                  <p className="text-sm text-gray-400">No records available for this group.</p>
+                {groupModalMonitorSlots.length === 0 ? (
+                  <p className="text-sm text-gray-400">No active session records to monitor for this group.</p>
                 ) : (
                   <div className="max-h-[65vh] overflow-x-hidden overflow-y-auto">
                     <table className="w-full text-xs sm:text-sm table-fixed">
@@ -1247,7 +1400,7 @@ export function BlockedSlotManager() {
                         </tr>
                       </thead>
                       <tbody>
-                        {groupModalSlots.map((slot) => (
+                        {groupModalMonitorSlots.map((slot) => (
                           <tr key={`modal-action-${slot._id}`} className="border-b border-gray-700/60 last:border-0">
                             <td className="px-2 py-1.5 text-gray-100 wrap-break-word">{courtNameById[slot.courtId] ?? slot.courtId}</td>
                             <td className="px-2 py-1.5 text-gray-100 wrap-break-word">{slot.bookingDate}</td>

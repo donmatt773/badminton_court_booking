@@ -12,6 +12,7 @@ interface BookingEvent {
   end: string;   // ISO string
   courtId: string;
   status: string;
+  source: "booking" | "blocked";
   paymentReference?: string | null;
   denialReason?: string | null;
   expiresAt?: string | null;
@@ -29,6 +30,19 @@ type BookingResponse = {
     paymentReference?: string | null;
     denialReason?: string | null;
     expiresAt?: string | null;
+  }>;
+};
+
+type BlockedSlotResponse = {
+  data?: Array<{
+    _id: string;
+    courtId: string;
+    bookingDate: string;
+    startTime: string;
+    endTime: string;
+    groupName?: string | null;
+    groupRepresentative?: string | null;
+    reason?: string | null;
   }>;
 };
 
@@ -80,6 +94,8 @@ function getStatusClasses(status: string) {
     case "CANCELLED":
     case "DENIED":
       return "bg-red-100 text-red-800 ring-1 ring-red-300 dark:bg-red-500/20 dark:text-red-300 dark:ring-red-500/30";
+    case "BLOCKED":
+      return "bg-indigo-100 text-indigo-800 ring-1 ring-indigo-300 dark:bg-indigo-500/20 dark:text-indigo-300 dark:ring-indigo-500/30";
     default:
       return "bg-slate-100 text-slate-700 ring-1 ring-slate-300 dark:bg-slate-500/20 dark:text-slate-200 dark:ring-slate-500/30";
   }
@@ -102,13 +118,23 @@ export const ScheduleCalendar: FC = () => {
 
     try {
       setError(null);
-      const res = await fetch("/api/admin/bookings", { credentials: "include" });
-      if (!res.ok) {
+      const [bookingsRes, blockedRes] = await Promise.all([
+        fetch("/api/admin/bookings", { credentials: "include" }),
+        fetch("/api/admin/blocked-slots", { credentials: "include" }),
+      ]);
+
+      if (!bookingsRes.ok) {
         throw new Error("Failed to fetch bookings");
       }
 
-      const data = (await res.json()) as BookingResponse;
-      const bookings = (data.data || []).map((b) => ({
+      if (!blockedRes.ok) {
+        throw new Error("Failed to fetch blocked slots");
+      }
+
+      const bookingData = (await bookingsRes.json()) as BookingResponse;
+      const blockedData = (await blockedRes.json()) as BlockedSlotResponse;
+
+      const bookings: BookingEvent[] = (bookingData.data || []).map((b) => ({
         _id: b._id,
         customerName:
           typeof b.customer === "object" && b.customer?.name
@@ -122,13 +148,30 @@ export const ScheduleCalendar: FC = () => {
         end: `${b.bookingDate}T${b.endTime}`,
         courtId: b.courtId,
         status: b.status || "UNKNOWN",
+        source: "booking",
         paymentReference: b.paymentReference || null,
         denialReason: b.denialReason || null,
         expiresAt: b.expiresAt || null,
       }));
-      setEvents(bookings);
+
+      const blockedSlots: BookingEvent[] = (blockedData.data || []).map((slot) => ({
+        _id: `blocked-${slot._id}`,
+        customerName: slot.groupName?.trim() || "Blocked Slot",
+        customerEmail: "-",
+        customerContactNumber: slot.groupRepresentative?.trim() || "-",
+        start: `${slot.bookingDate}T${slot.startTime}`,
+        end: `${slot.bookingDate}T${slot.endTime}`,
+        courtId: slot.courtId,
+        status: "BLOCKED",
+        source: "blocked",
+        paymentReference: slot.reason || null,
+        denialReason: null,
+        expiresAt: null,
+      }));
+
+      setEvents([...bookings, ...blockedSlots]);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to fetch bookings");
+      setError(err instanceof Error ? err.message : "Failed to fetch schedules");
     } finally {
       setLoading(false);
     }
@@ -145,15 +188,19 @@ export const ScheduleCalendar: FC = () => {
     }
 
     const channel = pusher.subscribe(REALTIME_CHANNELS.bookings);
+    const blockedChannel = pusher.subscribe(REALTIME_CHANNELS.blockedSlots);
     const handleUpdate = () => {
       void loadEvents();
     };
 
     channel.bind(REALTIME_EVENTS.updated, handleUpdate);
+    blockedChannel.bind(REALTIME_EVENTS.updated, handleUpdate);
 
     return () => {
       channel.unbind(REALTIME_EVENTS.updated, handleUpdate);
+      blockedChannel.unbind(REALTIME_EVENTS.updated, handleUpdate);
       pusher.unsubscribe(REALTIME_CHANNELS.bookings);
+      pusher.unsubscribe(REALTIME_CHANNELS.blockedSlots);
     };
   }, []);
 
@@ -251,7 +298,11 @@ export const ScheduleCalendar: FC = () => {
                       <button
                         key={ev._id}
                         type="button"
-                        className="w-full truncate rounded bg-emerald-100 px-1 py-0.5 text-left text-[10px] font-medium text-emerald-900 hover:bg-emerald-200 dark:bg-[#1E3A5F] dark:text-[#E2E8F0] dark:hover:bg-emerald-900/40 dark:hover:text-[#059669]"
+                        className={`w-full truncate rounded px-1 py-0.5 text-left text-[10px] font-medium ${
+                          ev.source === "blocked"
+                            ? "bg-indigo-100 text-indigo-900 hover:bg-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-200 dark:hover:bg-indigo-900/50"
+                            : "bg-emerald-100 text-emerald-900 hover:bg-emerald-200 dark:bg-[#1E3A5F] dark:text-[#E2E8F0] dark:hover:bg-emerald-900/40 dark:hover:text-[#059669]"
+                        }`}
                         title={ev.customerName}
                         onClick={() => setSelectedBooking(ev)}
                       >
@@ -346,7 +397,9 @@ export const ScheduleCalendar: FC = () => {
             <div className="flex items-center justify-between rounded-t-2xl border-b border-gray-700 bg-[#0B0F1A] px-5 py-4">
               <div>
                 <div className="text-base font-bold text-[#E2E8F0]">{selectedBooking.customerName}</div>
-                <div className="mt-0.5 text-xs text-gray-400">Booking Details</div>
+                <div className="mt-0.5 text-xs text-gray-400">
+                  {selectedBooking.source === "blocked" ? "Blocked Slot Details" : "Booking Details"}
+                </div>
               </div>
               <span className={`inline-flex w-fit items-center rounded-full px-2.5 py-1 text-xs font-semibold ${getStatusClasses(selectedBooking.status)}`}>
                 {selectedBooking.status}
@@ -377,21 +430,33 @@ export const ScheduleCalendar: FC = () => {
                   <div className="mt-1 text-[#E2E8F0]">{courtNames[selectedBooking.courtId] || selectedBooking.courtId}</div>
                 </div>
                 <div>
-                  <div className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">Contact</div>
+                  <div className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">
+                    {selectedBooking.source === "blocked" ? "Representative" : "Contact"}
+                  </div>
                   <div className="mt-1 text-[#E2E8F0]">{selectedBooking.customerContactNumber}</div>
                 </div>
                 <div>
-                  <div className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">Email</div>
-                  <div className="mt-1 break-all text-[#E2E8F0]">{selectedBooking.customerEmail}</div>
+                  <div className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">
+                    {selectedBooking.source === "blocked" ? "Type" : "Email"}
+                  </div>
+                  <div className="mt-1 break-all text-[#E2E8F0]">
+                    {selectedBooking.source === "blocked" ? "Blocked Slot" : selectedBooking.customerEmail}
+                  </div>
                 </div>
                 <div>
-                  <div className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">Payment Ref</div>
+                  <div className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">
+                    {selectedBooking.source === "blocked" ? "Reason" : "Payment Ref"}
+                  </div>
                   <div className="mt-1 text-[#E2E8F0]">{selectedBooking.paymentReference || "-"}</div>
                 </div>
                 <div>
                   <div className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">Expires At</div>
                   <div className="mt-1 text-[#E2E8F0]">
-                    {selectedBooking.expiresAt ? new Date(selectedBooking.expiresAt).toLocaleString() : "-"}
+                    {selectedBooking.source === "blocked"
+                      ? "-"
+                      : selectedBooking.expiresAt
+                        ? new Date(selectedBooking.expiresAt).toLocaleString()
+                        : "-"}
                   </div>
                 </div>
               </div>

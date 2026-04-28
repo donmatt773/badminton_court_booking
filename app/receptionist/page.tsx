@@ -1033,6 +1033,7 @@ const ReceptionistDashboard: FC = () => {
   const [showWalkIn, setShowWalkIn] = useState(false);
   const [bookingTableKey, setBookingTableKey] = useState(0);
   const [bookingActiveTab, setBookingActiveTab] = useState<StatusTab>("pending");
+  const [bookingFocusId, setBookingFocusId] = useState<string | null>(null);
   const [bookingSelectedCount, setBookingSelectedCount] = useState(0);
   const [bookingSearchCustomer, setBookingSearchCustomer] = useState("");
   const [showRequestNotifications, setShowRequestNotifications] = useState(false);
@@ -1101,6 +1102,16 @@ const ReceptionistDashboard: FC = () => {
 
     setRequestNotificationsSnapshot(unseenPendingRequestNotifications);
     setShowRequestNotifications(true);
+  }
+
+  function handleOpenNotificationBooking(booking: Booking): void {
+    setActiveTab("requests");
+    setBookingActiveTab("pending");
+    setBookingSearchCustomer(getBookingCustomerName(booking));
+    setBookingFocusId(booking._id);
+    setShowRequestNotifications(false);
+    setRequestNotificationsSnapshot([]);
+    setSidebarOpen(false);
   }
 
   useEffect(() => {
@@ -1307,7 +1318,13 @@ const ReceptionistDashboard: FC = () => {
                           return (
                             <li key={booking._id} className="border-b border-gray-800 px-3 py-2 last:border-0">
                               <div className="mb-1 flex items-center justify-between gap-2">
-                                <p className="text-sm font-medium text-gray-100">{customerName}</p>
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenNotificationBooking(booking)}
+                                  className="text-sm font-medium text-gray-100 underline decoration-dotted underline-offset-2 hover:text-emerald-300"
+                                >
+                                  {customerName}
+                                </button>
                                 <span className="rounded-full border border-amber-500/40 bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200">
                                   Not seen
                                 </span>
@@ -1380,6 +1397,8 @@ const ReceptionistDashboard: FC = () => {
           onSelectionChange={setBookingSelectedCount}
           searchCustomer={bookingSearchCustomer}
           externalActiveTab={bookingActiveTab}
+          externalFocusBookingId={bookingFocusId ?? undefined}
+          onFocusBookingHandled={() => setBookingFocusId(null)}
           currentStaffName={sessionUser?.name ?? undefined}
         />
       </div>

@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState, FC } from "react";
 import { useCourtCatalog } from "./use-court-names";
+import { ConfirmModal } from "./confirm-modal";
 import { getPusherClient } from "@/lib/client/pusher-client";
 import { REALTIME_CHANNELS, REALTIME_EVENTS } from "@/lib/shared/realtime-events";
 
@@ -281,6 +282,8 @@ interface BookingTableProps {
   onSelectionChange?: (count: number) => void;
   searchCustomer?: string;
   externalActiveTab?: StatusTab;
+  externalFocusBookingId?: string;
+  onFocusBookingHandled?: () => void;
   currentStaffName?: string;
 }
 
@@ -1261,10 +1264,10 @@ const PendingExpiryTimer: FC<{ expiresAt: string }> = ({ expiresAt }) => {
   );
 };
 
-const CourtTimer: FC<{ sessionStartedAt: string; startTime: string; endTime: string; onExpired?: () => void }> = ({ sessionStartedAt, startTime, endTime, onExpired }) => {
-  const durationMs = Math.max(0, (toMinutes(endTime) - toMinutes(startTime)) * 60 * 1000);
-  const targetTimeMs = durationMs > 0 ? new Date(sessionStartedAt).getTime() + durationMs : null;
-  const diffMs = useCountdown(targetTimeMs);
+const CourtTimer: FC<{ bookingDate: string; endTime: string; onExpired?: () => void }> = ({ bookingDate, endTime, onExpired }) => {
+  const targetTimeMs = new Date(`${bookingDate}T${endTime}:00`).getTime();
+  const normalizedTargetTimeMs = Number.isNaN(targetTimeMs) ? null : targetTimeMs;
+  const diffMs = useCountdown(normalizedTargetTimeMs);
   const firedRef = useRef(false);
 
   useEffect(() => {
@@ -1567,6 +1570,10 @@ const BookingActions: FC<BookingActionsProps> = ({
   const [actionError, setActionError] = useState<string | null>(null);
   const [showDenyModal, setShowDenyModal] = useState(false);
   const [showMarkPaidModal, setShowMarkPaidModal] = useState(false);
+  const [confirmModal, setConfirmModal] = useState<{
+    actionLabel: string;
+    onConfirm: () => void;
+  } | null>(null);
 
   async function updateBooking(extra: Record<string, unknown> = {}): Promise<void> {
     setLoading(true);
@@ -1605,9 +1612,15 @@ const BookingActions: FC<BookingActionsProps> = ({
     await updateBooking({ status, ...extra });
   }
 
+  function confirmBeforeEdit(actionLabel: string, onConfirm: () => void): void {
+    setConfirmModal({ actionLabel, onConfirm });
+  }
+
   function handleStartOrEndClick(): void {
     if (isSessionRunning) {
-      void updateStatus("COMPLETE", { endSession: true });
+      confirmBeforeEdit("end", () => {
+        void updateStatus("COMPLETE", { endSession: true });
+      });
       return;
     }
 
@@ -1621,7 +1634,9 @@ const BookingActions: FC<BookingActionsProps> = ({
       return;
     }
 
-    void updateBooking({ startSession: true });
+    confirmBeforeEdit("start", () => {
+      void updateBooking({ startSession: true });
+    });
   }
 
   const isPending   = booking.status === "PENDING";
@@ -1640,7 +1655,11 @@ const BookingActions: FC<BookingActionsProps> = ({
             <button
               type="button"
               disabled={loading}
-              onClick={() => void updateStatus("APPROVED")}
+              onClick={() => {
+                confirmBeforeEdit("accept", () => {
+                  void updateStatus("APPROVED");
+                });
+              }}
               className="px-2.5 py-1 text-xs font-medium rounded-md bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50"
             >
               Accept
@@ -1683,7 +1702,11 @@ const BookingActions: FC<BookingActionsProps> = ({
           <button
             type="button"
             disabled={loading || !hasSessionStarted || isSessionRunning}
-            onClick={() => void updateStatus("COMPLETE")}
+            onClick={() => {
+              confirmBeforeEdit("complete", () => {
+                void updateStatus("COMPLETE");
+              });
+            }}
             className="px-2.5 py-1 text-xs font-medium rounded-md bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50"
           >
             Done
@@ -1693,7 +1716,11 @@ const BookingActions: FC<BookingActionsProps> = ({
           <button
             type="button"
             disabled={loading}
-            onClick={() => void updateStatus("CANCELLED")}
+            onClick={() => {
+              confirmBeforeEdit("cancel", () => {
+                void updateStatus("CANCELLED");
+              });
+            }}
             className="px-2.5 py-1 text-xs font-medium rounded-md border border-gray-700 bg-[#1F2937] text-gray-400 hover:bg-gray-700 disabled:opacity-50"
           >
             Cancel
@@ -1735,6 +1762,28 @@ const BookingActions: FC<BookingActionsProps> = ({
           onCancel={() => setShowMarkPaidModal(false)}
         />
       )}
+
+      <ConfirmModal
+        isOpen={Boolean(confirmModal)}
+        overlayClassName="z-210"
+        title="Confirm Action"
+        message={
+          confirmModal
+            ? `Are you sure you want to ${confirmModal.actionLabel} this booking?`
+            : ""
+        }
+        cancelLabel="Cancel"
+        confirmLabel="Yes, Continue"
+        onCancel={() => setConfirmModal(null)}
+        onConfirm={() => {
+          if (!confirmModal) {
+            return;
+          }
+          const callback = confirmModal.onConfirm;
+          setConfirmModal(null);
+          callback();
+        }}
+      />
     </>
   );
 };
@@ -1785,7 +1834,7 @@ const StatusTabs: FC<StatusTabsProps> = ({ activeTab, counts, onChange }) => (
 // ---------------------------------------------------------------------------
 // Main table
 // ---------------------------------------------------------------------------
-export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef, restoreFnRef, onSelectionChange, searchCustomer = "", externalActiveTab, currentStaffName }) => {
+export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef, restoreFnRef, onSelectionChange, searchCustomer = "", externalActiveTab, externalFocusBookingId, onFocusBookingHandled, currentStaffName }) => {
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [loading, setLoading]   = useState(true);
@@ -1799,6 +1848,7 @@ export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef,
   const [archivedPage, setArchivedPage] = useState(1);
   const ARCHIVED_PAGE_SIZE = 10;
   const [selectedPaymentBooking, setSelectedPaymentBooking] = useState<Booking | null>(null);
+  const [focusedBookingId, setFocusedBookingId] = useState<string | null>(null);
   const courtCatalog             = useCourtCatalog();
   const courtNames               = Object.fromEntries(Object.entries(courtCatalog).map(([id, value]) => [id, value.name]));
   const initializedPendingIdsRef = useRef(false);
@@ -1851,6 +1901,20 @@ export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef,
     setArchivedPage(1);
     onSelectionChange?.(0);
   }, [activeTab, externalActiveTab, onSelectionChange]);
+
+  useEffect(() => {
+    if (!focusedBookingId) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setFocusedBookingId(null);
+    }, 3000);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [focusedBookingId]);
 
   useEffect(() => {
     setArchivedPage(1);
@@ -1913,6 +1977,38 @@ export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef,
   }, [fetchBookings]);
 
   useEffect(() => {
+    if (!externalFocusBookingId) {
+      return;
+    }
+
+    if (activeTab !== "pending") {
+      setActiveTab("pending");
+      setSelectedIds(new Set());
+      setArchivedPage(1);
+      onSelectionChange?.(0);
+      return;
+    }
+
+    const targetBooking = effectiveBookings.find((booking) => booking._id === externalFocusBookingId);
+    if (!targetBooking) {
+      if (!loading) {
+        onFocusBookingHandled?.();
+      }
+      return;
+    }
+
+    setSelectedPaymentBooking(targetBooking);
+    setFocusedBookingId(targetBooking._id);
+
+    window.requestAnimationFrame(() => {
+      const row = document.getElementById(`booking-row-${targetBooking._id}`);
+      row?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+
+    onFocusBookingHandled?.();
+  }, [activeTab, effectiveBookings, externalFocusBookingId, loading, onFocusBookingHandled, onSelectionChange]);
+
+  useEffect(() => {
     const pusher = getPusherClient();
     if (!pusher) {
       return;
@@ -1958,15 +2054,18 @@ export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef,
   useEffect(() => {
     const id = setInterval(() => {
       const now = Date.now();
+      const acceptedStatuses = new Set(["APPROVED", "CONFIRMED", "PAID"]);
       bookings.forEach((b) => {
-        if (b.status !== "PAID") return;
+        if (!acceptedStatuses.has(b.status)) return;
         if (firedExpiredIds.current.has(b._id)) return;
         const endMs = new Date(`${b.bookingDate}T${b.endTime}:00`).getTime();
-        if (now >= endMs) {
+        if (Number.isNaN(endMs)) return;
+        // Trigger only in the exact end-time minute to avoid replaying old bookings.
+        if (now >= endMs && now < endMs + 60_000) {
           firedExpiredIds.current.add(b._id);
           const customer = typeof b.customer === "object" ? b.customer.name : b.customer;
           const court = courtNames[b.courtId] || b.courtId;
-          const label = `⏰ ${customer}'s session on ${court} has ended (${b.bookingDate} ${formatTime12h(b.startTime)}–${formatTime12h(b.endTime)}). Please clear the court.`;
+          const label = `⏰ ${customer}'s accepted booking on ${court} reached end time (${b.bookingDate} ${formatTime12h(b.startTime)}–${formatTime12h(b.endTime)}).`;
           playExpiryAlert();
           setExpiredNotices((prev) =>
             prev.some((n) => n.id === b._id) ? prev : [...prev, { id: b._id, label }]
@@ -2009,6 +2108,14 @@ export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef,
       return customerName.toLowerCase().includes(searchCustomer.toLowerCase());
     })
     .sort((a, b) => {
+      if (activeTab === "accepted") {
+        const aPaid = a.status === "PAID" || Boolean(a.paymentReference);
+        const bPaid = b.status === "PAID" || Boolean(b.paymentReference);
+        if (aPaid !== bPaid) {
+          return aPaid ? 1 : -1;
+        }
+      }
+
       const customerA = typeof a.customer === "object" ? a.customer.name : String(a.customer);
       const customerB = typeof b.customer === "object" ? b.customer.name : String(b.customer);
       const contactA = typeof a.customer === "object" ? a.customer.contactNumber || "" : "";
@@ -2213,9 +2320,12 @@ export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef,
               return (
                 <tr
                   key={b._id}
+                  id={`booking-row-${b._id}`}
                   className={`border-b border-gray-700/60 last:border-b-0 transition-colors ${
                     isSelected
                       ? "bg-indigo-950/30"
+                      : focusedBookingId === b._id
+                      ? "bg-emerald-900/30 ring-1 ring-inset ring-emerald-500/40"
                       : isPending
                       ? "bg-amber-950/20 hover:bg-amber-950/40"
                       : "hover:bg-[#1a2235]"
@@ -2267,8 +2377,7 @@ export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef,
                     )}
                     {b.status === "PAID" && b.sessionStartedAt && !b.sessionEndedAt && (
                       <CourtTimer
-                        sessionStartedAt={b.sessionStartedAt}
-                        startTime={b.startTime}
+                        bookingDate={b.bookingDate}
                         endTime={b.endTime}
                         onExpired={() => {
                           const customer = typeof b.customer === "object" ? b.customer.name : b.customer;

@@ -65,6 +65,14 @@ type SuccessModalSummary = {
   endTime: string;
 };
 
+type PaymentSettings = {
+  provider: string;
+  accountName: string;
+  accountNumber: string;
+  instructions?: string | null;
+  qrImage?: string | null;
+};
+
 // ---------------------------------------------------------------------------
 // Time configuration
 // ---------------------------------------------------------------------------
@@ -354,6 +362,7 @@ export default function BookingExperience() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isSuccessModalOpen, setIsSuccessModalOpen] = useState(false);
   const [successSummary, setSuccessSummary] = useState<SuccessModalSummary | null>(null);
+  const [paymentSettings, setPaymentSettings] = useState<PaymentSettings | null>(null);
   const [reservationStep, setReservationStep] = useState<1 | 2>(1);
   const [isSubmittingRequest, setIsSubmittingRequest] = useState(false);
   const [courtsPage, setCourtsPage] = useState(1);
@@ -487,6 +496,33 @@ export default function BookingExperience() {
     };
   }, [refetch]);
 
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadPaymentSettings(): Promise<void> {
+      try {
+        const response = await fetch("/api/payment-settings");
+        if (!response.ok) {
+          return;
+        }
+
+        const body = (await response.json()) as { data?: PaymentSettings };
+        if (isMounted) {
+          setPaymentSettings(body.data ?? null);
+        }
+      } catch {
+        if (isMounted) {
+          setPaymentSettings(null);
+        }
+      }
+    }
+
+    void loadPaymentSettings();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
   // Close modal on Escape
   useEffect(() => {
     if (!isModalOpen) return;
@@ -601,7 +637,7 @@ export default function BookingExperience() {
         startTime: form.startTime,
         endTime: form.endTime,
       });
-      setStatusMessage("Reservation submitted successfully. Please wait for receptionist approval before sending payment screenshot via Messenger.");
+      setStatusMessage("Reservation submitted successfully. Screenshot this confirmation for your payment reference, or ask the front desk if you need help paying.");
       setIsModalOpen(false);
       setIsSuccessModalOpen(true);
       await refetch();
@@ -670,6 +706,15 @@ export default function BookingExperience() {
         </a>
         <div style={{ display: "flex", alignItems: "center", gap: 30, flexWrap: "wrap", fontSize: 13 }}>
           <a href="#home" className="hidden sm:inline" style={{ color: "rgba(255,255,255,0.85)", textDecoration: "none" }}>Home</a>
+          <a
+            href="https://m.me/coneconesportscenter"
+            target="_blank"
+            rel="noreferrer"
+            className="hidden sm:inline"
+            style={{ color: "rgba(255,255,255,0.85)", textDecoration: "none" }}
+          >
+            Message
+          </a>
           <a href="#courts" className="hidden sm:inline" style={{ color: "rgba(255,255,255,0.85)", textDecoration: "none" }}>Courts</a>
           <Link
             href="/login"
@@ -1122,6 +1167,7 @@ export default function BookingExperience() {
             <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 6, fontSize: 13 }}>
               <li><a href="https://c-one.ph/#" style={{ color: "rgba(255,255,255,0.85)", textDecoration: "none" }}>C-One Official Website</a></li>
               <li><a href="https://c-one.ph/sports-center" style={{ color: "rgba(255,255,255,0.85)", textDecoration: "none" }}>Sports Center</a></li>
+              <li><a href="https://www.facebook.com/coneconesportscenter/" target="_blank" rel="noreferrer" style={{ color: "rgba(255,255,255,0.85)", textDecoration: "none" }}>Facebook Page</a></li>
             </ul>
           </div>
           <div>
@@ -1732,7 +1778,7 @@ export default function BookingExperience() {
             onClick={(e) => e.stopPropagation()}
             style={{
               width: "100%",
-              maxWidth: "min(520px, calc(100vw - 24px))",
+              maxWidth: "min(780px, calc(100vw - 24px))",
               background: "var(--color-background-primary)",
               border: "1px solid rgba(16,185,129,0.25)",
               borderRadius: "var(--border-radius-lg)",
@@ -1782,34 +1828,157 @@ export default function BookingExperience() {
                 lineHeight: 1.6,
               }}
             >
-              {statusMessage || "Your reservation request has been sent. Please wait for receptionist approval before sending payment screenshot via Messenger."}
+              {statusMessage || "Your reservation request has been sent. Screenshot this confirmation for your payment reference, or ask the front desk if you need help paying."}
             </p>
 
-            {successSummary && (
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+                alignItems: "start",
+                gap: 12,
+              }}
+            >
               <div
                 style={{
                   borderRadius: "var(--border-radius-md)",
                   border: "1px solid var(--color-border-tertiary)",
                   background: "var(--color-background-secondary)",
-                  padding: "10px 12px",
+                  padding: "12px",
                   display: "grid",
-                  gap: 6,
+                  gap: 10,
                 }}
               >
-                <p style={{ margin: 0, fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--color-text-secondary)" }}>
-                  Booking details
-                </p>
-                <p style={{ margin: 0, fontSize: 13, color: "var(--color-text-primary)" }}>
-                  Court{successSummary.courts.length !== 1 ? "s" : ""}: {successSummary.courts.join(", ")}
-                </p>
-                <p style={{ margin: 0, fontSize: 13, color: "var(--color-text-primary)" }}>
-                  Date: {successSummary.bookingDate}
-                </p>
-                <p style={{ margin: 0, fontSize: 13, color: "var(--color-text-primary)" }}>
-                  Timeslot: {formatHour(successSummary.startTime)} - {formatHour(successSummary.endTime)}
-                </p>
+                {successSummary && (
+                  <div
+                    style={{
+                      borderRadius: "var(--border-radius-md)",
+                      border: "1px solid var(--color-border-tertiary)",
+                      background: "var(--color-background-primary)",
+                      padding: "10px 12px",
+                      display: "grid",
+                      gap: 6,
+                    }}
+                  >
+                    <p style={{ margin: 0, fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--color-text-secondary)" }}>
+                      Booking details
+                    </p>
+                    <p style={{ margin: 0, fontSize: 13, color: "var(--color-text-primary)" }}>
+                      Court{successSummary.courts.length !== 1 ? "s" : ""}: {successSummary.courts.join(", ")}
+                    </p>
+                    <p style={{ margin: 0, fontSize: 13, color: "var(--color-text-primary)" }}>
+                      Date: {successSummary.bookingDate}
+                    </p>
+                    <p style={{ margin: 0, fontSize: 13, color: "var(--color-text-primary)" }}>
+                      Timeslot: {formatHour(successSummary.startTime)} - {formatHour(successSummary.endTime)}
+                    </p>
+                  </div>
+                )}
+
+                <div
+                  style={{
+                    borderRadius: "var(--border-radius-md)",
+                    border: "1px solid rgba(251,191,36,0.25)",
+                    background: "rgba(120,53,15,0.22)",
+                    padding: "10px 12px",
+                    display: "grid",
+                    gap: 6,
+                  }}
+                >
+                  <p style={{ margin: 0, fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: "#FCD34D" }}>
+                    Payment reminder
+                  </p>
+                  <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6, color: "#FEF3C7" }}>
+                    Screenshot this confirmation before you leave this page. Use it when paying online, or show it to the front desk if you want staff assistance with payment.
+                  </p>
+                </div>
               </div>
-            )}
+
+              {(paymentSettings?.accountName || paymentSettings?.accountNumber || paymentSettings?.instructions || paymentSettings?.qrImage) ? (
+                <div
+                  style={{
+                    display: "grid",
+                    gap: 10,
+                    borderRadius: "var(--border-radius-md)",
+                    border: "1px solid var(--color-border-tertiary)",
+                    background: "var(--color-background-secondary)",
+                    padding: "12px",
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "grid",
+                      gap: 4,
+                    }}
+                  >
+                    <p style={{ margin: 0, fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--color-text-secondary)" }}>
+                      Online payment destination
+                    </p>
+                    <p style={{ margin: 0, fontSize: 13, color: "var(--color-text-primary)" }}>
+                      Send payment to the account below if you are paying online.
+                    </p>
+                  </div>
+
+                  <div
+                    style={{
+                      display: "grid",
+                      gap: 6,
+                      borderRadius: "var(--border-radius-md)",
+                      border: "1px solid var(--color-border-tertiary)",
+                      background: "var(--color-background-primary)",
+                      padding: "10px 12px",
+                    }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: 13 }}>
+                      <span style={{ color: "var(--color-text-secondary)" }}>Provider</span>
+                      <span style={{ color: "var(--color-text-primary)", fontWeight: 600 }}>{paymentSettings?.provider || "GCash"}</span>
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: 13 }}>
+                      <span style={{ color: "var(--color-text-secondary)" }}>Account name</span>
+                      <span style={{ color: "var(--color-text-primary)", fontWeight: 600, textAlign: "right" }}>{paymentSettings?.accountName || "-"}</span>
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: 13 }}>
+                      <span style={{ color: "var(--color-text-secondary)" }}>Account number</span>
+                      <span style={{ color: "var(--color-text-primary)", fontWeight: 600, textAlign: "right" }}>{paymentSettings?.accountNumber || "-"}</span>
+                    </div>
+                    {paymentSettings?.instructions ? (
+                      <p style={{ margin: "4px 0 0", fontSize: 12, lineHeight: 1.6, color: "var(--color-text-secondary)" }}>
+                        {paymentSettings.instructions}
+                      </p>
+                    ) : null}
+                  </div>
+
+                  {paymentSettings?.qrImage ? (
+                    <div
+                      style={{
+                        borderRadius: "var(--border-radius-md)",
+                        border: "1px solid var(--color-border-tertiary)",
+                        background: "var(--color-background-primary)",
+                        padding: "12px",
+                        display: "grid",
+                        justifyItems: "center",
+                        gap: 8,
+                      }}
+                    >
+                      <p style={{ margin: 0, fontSize: 12, color: "var(--color-text-secondary)" }}>Scan the QR code to pay online.</p>
+                      <img
+                        src={paymentSettings.qrImage}
+                        alt={`${paymentSettings.provider || "Payment"} QR code`}
+                        style={{
+                          width: 160,
+                          height: 160,
+                          objectFit: "contain",
+                          borderRadius: "var(--border-radius-md)",
+                          border: "1px solid var(--color-border-tertiary)",
+                          background: "#ffffff",
+                          padding: 10,
+                        }}
+                      />
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
 
             <button
               type="button"
