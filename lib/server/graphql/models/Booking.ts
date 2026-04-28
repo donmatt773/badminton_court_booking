@@ -69,7 +69,7 @@ const bookingSchema = new Schema(
     paymentReference: {
       type: String,
       trim: true,
-      maxlength: 80,
+      maxlength: 200,
       default: null,
     },
     paymentMethod: {
@@ -79,6 +79,14 @@ const bookingSchema = new Schema(
     },
     paymentProofImage: {
       type: String, // base64 data URL of receipt screenshot
+      default: null,
+    },
+    sessionStartedAt: {
+      type: Date,
+      default: null,
+    },
+    sessionEndedAt: {
+      type: Date,
       default: null,
     },
     isArchived: {

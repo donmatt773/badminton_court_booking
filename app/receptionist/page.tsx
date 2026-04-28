@@ -63,6 +63,83 @@ type RevenueBlockedSession = {
   chargedAmount?: number | null;
 };
 
+type PaymentSettings = {
+  provider: string;
+  accountName: string;
+  accountNumber: string;
+  instructions?: string | null;
+  qrImage?: string | null;
+};
+
+const PaymentDestinationViewer: FC = () => {
+  const [settings, setSettings] = useState<PaymentSettings | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    async function load(): Promise<void> {
+      try {
+        const response = await fetch('/api/admin/payment-settings', { credentials: 'include' });
+        if (!response.ok) {
+          throw new Error('Failed to load payment destination');
+        }
+        const body = (await response.json()) as { data?: PaymentSettings };
+        if (mounted) {
+          setSettings(body.data ?? null);
+        }
+      } catch (err) {
+        if (mounted) {
+          setError(err instanceof Error ? err.message : 'Failed to load payment destination');
+        }
+      } finally {
+        if (mounted) {
+          setLoading(false);
+        }
+      }
+    }
+    void load();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  return (
+    <div className="mb-4 rounded-xl border border-cyan-700/30 bg-[#0B0F1A] p-4">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-[0.18em] text-cyan-300">Official Payment Destination</p>
+          <p className="mt-1 text-xs text-gray-500">Admin-managed. Staff can use this for payment review only.</p>
+        </div>
+      </div>
+      {loading ? (
+        <p className="text-sm text-gray-500">Loading payment destination...</p>
+      ) : error ? (
+        <p className="text-sm text-red-400">{error}</p>
+      ) : settings ? (
+        <div className="grid gap-4 md:grid-cols-[1fr_auto] md:items-start">
+          <div className="grid gap-2 text-sm text-gray-200">
+            <div><span className="text-gray-500">Provider:</span> {settings.provider || '—'}</div>
+            <div><span className="text-gray-500">Account Name:</span> {settings.accountName || '—'}</div>
+            <div><span className="text-gray-500">Account Number:</span> {settings.accountNumber || '—'}</div>
+            <div><span className="text-gray-500">Instructions:</span> {settings.instructions || '—'}</div>
+          </div>
+          {settings.qrImage ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={settings.qrImage}
+              alt="Official payment QR"
+              className="h-32 w-32 rounded-lg border border-gray-700 bg-[#111827] object-contain p-2"
+            />
+          ) : null}
+        </div>
+      ) : (
+        <p className="text-sm text-gray-500">No payment destination configured yet.</p>
+      )}
+    </div>
+  );
+};
+
 function hoursFromTimes(start: string, end: string): number {
   const [sh] = start.split(":").map(Number);
   const [eh] = end.split(":").map(Number);
@@ -901,7 +978,7 @@ const RevenueViewer: FC<{ staffName: string }> = ({ staffName }) => {
   );
 };
 
-type TabKey = 'requests' | 'courts' | 'schedules' | 'blocking' | 'revenue' | 'profile';
+type TabKey = 'requests' | 'payment' | 'courts' | 'schedules' | 'blocking' | 'revenue' | 'profile';
 interface Tab {
   key: TabKey;
   label: string;
@@ -916,6 +993,7 @@ type SessionUser = {
 
 const TABS: Tab[] = [
   { key: 'requests', label: 'Booking Management' },
+  { key: 'payment', label: 'Payment Destination' },
   { key: 'courts', label: 'Court Viewer' },
   { key: 'schedules', label: 'Schedules Viewer' },
   { key: 'blocking', label: 'Blocking' },
@@ -1057,7 +1135,18 @@ const ReceptionistDashboard: FC = () => {
           onSelectionChange={setBookingSelectedCount}
           searchCustomer={bookingSearchCustomer}
           externalActiveTab={bookingActiveTab}
+          currentStaffName={sessionUser?.name ?? undefined}
         />
+      </div>
+    );
+  } else if (activeTab === 'payment') {
+    content = (
+      <div
+        className="bg-[#111827] rounded-xl shadow-lg p-4 w-full mx-auto"
+        style={{ maxWidth: "1200px", minHeight: "calc(100vh - 2rem)" }}
+      >
+        <div className="text-lg font-semibold text-gray-200 mb-3 border-b border-gray-700 pb-2">Payment Destination</div>
+        <PaymentDestinationViewer />
       </div>
     );
   } else if (activeTab === 'courts') {

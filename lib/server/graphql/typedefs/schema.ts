@@ -61,6 +61,8 @@ export const typeDefs = `#graphql
     paymentReference: String
     paymentMethod: String
     paymentProofImage: String
+    sessionStartedAt: String
+    sessionEndedAt: String
     denialReason: String
     expiresAt: String!
     createdAt: String!
@@ -118,6 +120,7 @@ export const typeDefs = `#graphql
     endTime: String!
     paymentMethod: String
     paymentProofImage: String
+    paymentReference: String
   }
 
   type Query {

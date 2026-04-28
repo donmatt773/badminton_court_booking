@@ -16,6 +16,7 @@ export const createBookingSchema = z.object({
   endTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$|^24:00$/, "endTime must be HH:mm or 24:00"),
   paymentMethod: z.enum(["cash", "online"]).optional(),
   paymentProofImage: z.string().max(4_000_000).optional(),
+  paymentReference: z.string().trim().max(200).optional(),
 });
 
 export const updateBookingStatusSchema = z.object({
@@ -53,7 +54,7 @@ export const updateBookingStatusSchema = z.object({
 
 export const recordPaymentSchema = z.object({
   bookingId: z.string().min(1),
-  paymentReference: z.string().min(3).max(80),
+  paymentReference: z.string().min(3).max(200),
 });
 
 export function assertValidTimeRange(startTime: string, endTime: string): void {

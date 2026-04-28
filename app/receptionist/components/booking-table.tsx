@@ -13,6 +13,238 @@ function formatTime12h(time: string): string {
   return `${hour}:${m.toString().padStart(2, "0")} ${ampm}`;
 }
 
+function toMinutes(time: string): number {
+  const [h, m] = time.split(":").map(Number);
+  if (isNaN(h) || isNaN(m)) {
+    return 0;
+  }
+  return h * 60 + m;
+}
+
+function localISODate(): string {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function currentTimeHHMM(): string {
+  const now = new Date();
+  const hours = String(now.getHours()).padStart(2, "0");
+  const minutes = String(now.getMinutes()).padStart(2, "0");
+  return `${hours}:${minutes}`;
+}
+
+function parseCurrencyTextToNumber(text: string): number | null {
+  const normalized = text.replace(/[^0-9.,]/g, "").trim();
+  if (!normalized) {
+    return null;
+  }
+
+  const withDotDecimal = normalized.replace(/,/g, "");
+  const parsed = Number.parseFloat(withDotDecimal);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function normalizeReferenceForStorage(value: string): string {
+  return value.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+}
+
+function extractReceiptFields(
+  ocrText: string,
+  options?: { expectedAmount?: number }
+): { referenceNumber: string; amountPaid: string } {
+  const text = ocrText.replace(/\r/g, "");
+  const lines = text.split("\n").map((line) => line.trim()).filter(Boolean);
+  const expectedAmount = options?.expectedAmount;
+
+  let referenceNumber = "";
+  let amountPaid = "";
+
+  const referenceLabelPattern = /(reference\s*no\.?|reference\s*number|ref\.?\s*no\.?|ref\s*#|ret\.?\s*no\.?|transaction\s*(?:no\.?|id)|txn\s*(?:no\.?|id)|rrn|trace\s*no\.?|reference\s*id|reference\b)/i;
+  const referenceValuePattern = /([A-Z0-9][A-Z0-9-]{5,30})/i;
+  const referenceSpacedNumberPattern = /((?:\d[\s-]*){8,20})/;
+  const normalizeReferenceValue = (value: string): string => value.replace(/[\s-]+/g, "").toUpperCase();
+  type ReferenceCandidate = { value: string; score: number };
+  const referenceCandidates: ReferenceCandidate[] = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (!referenceLabelPattern.test(line)) {
+      continue;
+    }
+
+    const candidateLine = line.replace(referenceLabelPattern, " ");
+    const currentSpacedNumberMatch = candidateLine.match(referenceSpacedNumberPattern);
+    const currentLineMatch = currentSpacedNumberMatch ?? candidateLine.match(referenceValuePattern);
+    const nextLine = lines[index + 1] ?? "";
+    const nextSpacedNumberMatch = nextLine.match(referenceSpacedNumberPattern);
+    const nextLineMatch = nextSpacedNumberMatch ?? nextLine.match(referenceValuePattern);
+
+    if (currentLineMatch?.[1] && !referenceLabelPattern.test(currentLineMatch[1])) {
+      const value = normalizeReferenceValue(currentLineMatch[1]);
+      let score = 0;
+      if (/reference\s*no\.?|reference\s*number|ref\.?\s*no\.?|transaction\s*no\.?/i.test(line)) {
+        score += 14;
+      }
+      if (/ref\s*#|ret\.?\s*no\.?|txn\s*(?:no\.?|id)/i.test(line)) {
+        score += 8;
+      }
+      if (/reference\s*id/i.test(line)) {
+        score += 6;
+      }
+      if (/^\d{8,16}$/.test(value)) {
+        score += 8;
+      }
+      if (/^63\d{9,11}$/.test(value)) {
+        score -= 6;
+      }
+      referenceCandidates.push({ value, score });
+    }
+
+    if (nextLineMatch?.[1] && !referenceLabelPattern.test(nextLine)) {
+      const value = normalizeReferenceValue(nextLineMatch[1]);
+      let score = 10;
+      if (/reference\s*no\.?|reference\s*number|ref\.?\s*no\.?|transaction\s*no\.?/i.test(line)) {
+        score += 10;
+      }
+      if (/ref\s*#|ret\.?\s*no\.?|txn\s*(?:no\.?|id)/i.test(line)) {
+        score += 6;
+      }
+      if (/^\d{8,16}$/.test(value)) {
+        score += 8;
+      }
+      if (/^63\d{9,11}$/.test(value)) {
+        score -= 6;
+      }
+      referenceCandidates.push({ value, score });
+    }
+  }
+
+  if (referenceCandidates.length) {
+    referenceCandidates.sort((left, right) => right.score - left.score || left.value.length - right.value.length);
+    referenceNumber = referenceCandidates[0].value;
+  }
+
+  if (!referenceNumber) {
+    const explicitRefLine = lines.find((line) => /(ref\.?\s*no\.?|reference\s*no\.?|ret\.?\s*no\.?|transaction\s*(?:no\.?|id))/i.test(line));
+    if (explicitRefLine) {
+      const explicitMatch = explicitRefLine.replace(referenceLabelPattern, " ").match(referenceValuePattern);
+      const explicitSpacedMatch = explicitRefLine.replace(referenceLabelPattern, " ").match(referenceSpacedNumberPattern);
+      const explicitValue = explicitSpacedMatch?.[1] ?? explicitMatch?.[1];
+      if (explicitValue) {
+        referenceNumber = normalizeReferenceValue(explicitValue);
+      }
+    }
+  }
+
+  // Fallback: scan every line for a standalone spaced numeric block (e.g. GCash Express Send
+  // puts "9036 966 503216" on its own line with no label).
+  if (!referenceNumber) {
+    for (const line of lines) {
+      if (/jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec/i.test(line)) continue;
+      if (/:\d{2}/.test(line)) continue;
+      if (/[₱£$€]/.test(line)) continue;
+      if (/^\+?63\d/.test(line.replace(/\s/g, ""))) continue;
+      const standaloneSpaced = line.match(/^[\s]*(?:\d[\s-]*){10,20}[\s]*$/);
+      if (standaloneSpaced) {
+        const compact = line.replace(/[\s-]+/g, "");
+        if (/^\d{10,16}$/.test(compact)) {
+          referenceNumber = compact;
+          break;
+        }
+      }
+    }
+  }
+
+  if (!referenceNumber) {
+    const fallbackRefMatch = text.match(/\b[A-Z0-9]{10,30}\b/g);
+    if (fallbackRefMatch?.length) {
+      referenceNumber = fallbackRefMatch[0].toUpperCase();
+    }
+  }
+
+  const moneyPattern = /(?:₱|PHP)?\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2})?|[0-9]+(?:\.[0-9]{2})?)/gi;
+
+  type AmountCandidate = { value: number; line: string; score: number; diff: number };
+  const candidates: AmountCandidate[] = [];
+
+  for (const line of lines) {
+    const matches = [...line.matchAll(moneyPattern)];
+    if (!matches.length) {
+      continue;
+    }
+
+    const lineLower = line.toLowerCase();
+    for (const match of matches) {
+      const parsed = parseCurrencyTextToNumber(match[1]);
+      if (parsed === null) {
+        continue;
+      }
+
+      let score = 0;
+      if (/\btotal\b|total\s*payment|grand\s*total|total\s*amount|total\s*amount\s*sent/i.test(lineLower)) {
+        score += 22;
+      } else if (/(amount\s*paid|payment\s*amount|you\s*sent|amount\s*received|amount\s*sent|sent\s*via\s*gcash|express\s*send)/i.test(lineLower)) {
+        score += 16;
+      } else if (/\bamount\b/i.test(lineLower)) {
+        score += 8;
+      } else if (/\bpaid\b|\bpayment\b/i.test(lineLower)) {
+        score += 6;
+      }
+      if (/(reference|ref\.?\s*no|transaction\s*(id|no)|rrn|trace\s*no)/i.test(lineLower)) {
+        score -= 2;
+      }
+      if (/(available\s*balance|ending\s*balance|current\s*balance|remaining\s*balance|wallet\s*balance|balance\b)/i.test(lineLower)) {
+        score -= 14;
+      }
+      if (/(change\b|fee\b|service\s*fee|convenience\s*fee)/i.test(lineLower)) {
+        score -= 12;
+      }
+      if (/(g\s*coco|points?\b|reward|voucher|promo|cashback)/i.test(lineLower)) {
+        score -= 20;
+      }
+      if (/(^|\s)(am|pm)(\s|$)|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|:\d{2}/i.test(lineLower)) {
+        score -= 4;
+      }
+
+      const diff = Number.isFinite(expectedAmount) ? Math.abs(parsed - (expectedAmount ?? 0)) : Number.POSITIVE_INFINITY;
+      if (Number.isFinite(diff)) {
+        if (diff < 0.01) {
+          score += 5;
+        } else if (diff <= 5) {
+          score += 4;
+        } else if (diff <= 20) {
+          score += 2;
+        }
+      }
+
+      if (/\btotal\b/i.test(lineLower) && Number.isFinite(expectedAmount) && parsed >= (expectedAmount ?? 0)) {
+        score += 6;
+      }
+
+      candidates.push({ value: parsed, line, score, diff });
+    }
+  }
+
+  if (candidates.length) {
+    candidates.sort((left, right) => {
+      if (right.score !== left.score) {
+        return right.score - left.score;
+      }
+      if (left.diff !== right.diff) {
+        return left.diff - right.diff;
+      }
+      return left.value - right.value;
+    });
+
+    amountPaid = candidates[0].value.toFixed(2);
+  }
+
+  return { referenceNumber, amountPaid };
+}
+
 export interface Booking {
   _id: string;
   customer: { name: string; email: string; contactNumber: string } | string;
@@ -25,10 +257,20 @@ export interface Booking {
   paymentReference?: string | null;
   paymentMethod?: "cash" | "online" | null;
   paymentProofImage?: string | null;
+  sessionStartedAt?: string | null;
+  sessionEndedAt?: string | null;
   denialReason?: string | null;
   actionBy?: { userId: string; name: string; username: string } | null;
   expiresAt: string;
 }
+
+type PaymentSettings = {
+  provider: string;
+  accountName: string;
+  accountNumber: string;
+  instructions?: string | null;
+  qrImage?: string | null;
+};
 
 export type StatusTab = "all" | "pending" | "accepted" | "completed" | "rejected" | "cancelled" | "archived";
 
@@ -39,6 +281,7 @@ interface BookingTableProps {
   onSelectionChange?: (count: number) => void;
   searchCustomer?: string;
   externalActiveTab?: StatusTab;
+  currentStaffName?: string;
 }
 
 const TAB_GROUPS: Record<StatusTab, string[]> = {
@@ -173,6 +416,13 @@ const MarkPaidModal: FC<MarkPaidModalProps> = ({
   const [cameraError, setCameraError] = useState("");
   const [cameraOpen, setCameraOpen] = useState(false);
   const [showReceiptPreview, setShowReceiptPreview] = useState(false);
+  const [showOnlineConfirm, setShowOnlineConfirm] = useState(false);
+  const [showImagePreview, setShowImagePreview] = useState(false);
+  const [paymentSettings, setPaymentSettings] = useState<PaymentSettings | null>(null);
+  const [isScanningReceipt, setIsScanningReceipt] = useState(false);
+  const [receiptScanMessage, setReceiptScanMessage] = useState("");
+  const [receiptScanRawText, setReceiptScanRawText] = useState("");
+  const [hasAutoFilledReceipt, setHasAutoFilledReceipt] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
@@ -185,6 +435,7 @@ const MarkPaidModal: FC<MarkPaidModalProps> = ({
   const hasValidOnlineAmount = Number.isFinite(onlineAmountPaid) && onlineAmountPaid >= 0;
   const isOnlineEnough = hasValidOnlineAmount && onlineAmountPaid >= requiredAmount;
   const onlineShort = hasValidOnlineAmount ? Math.max(0, requiredAmount - onlineAmountPaid) : requiredAmount;
+  const onlineChange = hasValidOnlineAmount ? Math.max(0, onlineAmountPaid - requiredAmount) : 0;
   const hasOnlineReference = onlineReferenceNo.trim().length > 0;
   const needsReceiptConfirm = method === "cash" && isCashEnough && cashChange > 0;
   const receiptNo = `RCPT-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${Date.now().toString().slice(-5)}`;
@@ -193,27 +444,35 @@ const MarkPaidModal: FC<MarkPaidModalProps> = ({
   const businessTin = "TIN: 000-000-000-000";
   const cashierName = staffAssignedName || "Receptionist";
 
-  function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (!file.type.startsWith("image/")) {
-      setImageError("Please select an image file.");
-      return;
-    }
-    if (file.size > 5 * 1024 * 1024) {
-      setImageError("Image must be under 5 MB.");
-      return;
-    }
-    setImageError("");
-    const reader = new FileReader();
-    reader.onload = (ev) => setImagePreview(ev.target?.result as string);
-    reader.readAsDataURL(file);
-  }
-
   const canSubmit =
     method === "cash"
       ? isCashEnough
       : imagePreview !== null && hasOnlineReference && isOnlineEnough;
+
+  useEffect(() => {
+    let mounted = true;
+    async function loadPaymentSettings(): Promise<void> {
+      try {
+        const response = await fetch('/api/admin/payment-settings', { credentials: 'include' });
+        if (!response.ok) {
+          return;
+        }
+        const body = (await response.json()) as { data?: PaymentSettings };
+        if (mounted) {
+          setPaymentSettings(body.data ?? null);
+        }
+      } catch {
+        if (mounted) {
+          setPaymentSettings(null);
+        }
+      }
+    }
+
+    void loadPaymentSettings();
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   function stopCamera(): void {
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -275,8 +534,72 @@ const MarkPaidModal: FC<MarkPaidModalProps> = ({
     ctx.drawImage(video, 0, 0, width, height);
     const dataUrl = canvas.toDataURL("image/jpeg", 0.9);
     setImagePreview(dataUrl);
+    void scanReceiptImageData(dataUrl);
     setCameraError("");
     stopCamera();
+  }
+
+  async function scanReceiptImageData(imageData: string): Promise<void> {
+    setIsScanningReceipt(true);
+    setReceiptScanMessage("Scanning receipt. Please wait...");
+    setReceiptScanRawText("");
+    setHasAutoFilledReceipt(false);
+    setImageError("");
+
+    try {
+      const { recognize } = await import("tesseract.js");
+      const result = await recognize(imageData, "eng");
+      setReceiptScanRawText((result.data?.text ?? "").trim());
+      const extracted = extractReceiptFields(result.data?.text ?? "", {
+        expectedAmount: requiredAmount,
+      });
+
+      if (extracted.referenceNumber) {
+        setOnlineReferenceNo(extracted.referenceNumber);
+      }
+      if (extracted.amountPaid) {
+        setOnlineAmountInput(extracted.amountPaid);
+      }
+
+      if (extracted.referenceNumber || extracted.amountPaid) {
+        setHasAutoFilledReceipt(true);
+        setReceiptScanMessage("Receipt scanned automatically. Please verify before submitting.");
+      } else {
+        setReceiptScanMessage("Could not detect reference/amount clearly. Please fill them manually or retry.");
+      }
+    } catch {
+      setReceiptScanMessage("Auto-scan failed. Please fill details manually or retry.");
+      setReceiptScanRawText("");
+    } finally {
+      setIsScanningReceipt(false);
+    }
+  }
+
+  async function handleFileUpload(file: File): Promise<void> {
+    if (!file.type.startsWith("image/")) {
+      setImageError("Please select an image file.");
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setImageError("Image must be under 5 MB.");
+      return;
+    }
+
+    setImageError("");
+    setReceiptScanRawText("");
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const result = ev.target?.result as string;
+      setImagePreview(result);
+      void scanReceiptImageData(result);
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    void handleFileUpload(file);
   }
 
   useEffect(() => {
@@ -295,7 +618,7 @@ const MarkPaidModal: FC<MarkPaidModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
-      <div className="bg-[#111827] rounded-2xl shadow-2xl p-6 w-full max-w-sm border border-gray-800">
+      <div className={`bg-[#111827] rounded-2xl shadow-2xl p-6 w-full border border-gray-800 ${method === "online" ? "max-w-5xl" : "max-w-sm"}`}>
         <h3 className="text-base font-semibold text-white mb-1">Mark as Paid</h3>
         <p className="text-xs text-gray-500 mb-4">Record how the customer paid for this booking.</p>
 
@@ -310,6 +633,10 @@ const MarkPaidModal: FC<MarkPaidModalProps> = ({
               setCameraError("");
               setOnlineReferenceNo("");
               setOnlineAmountInput("");
+              setReceiptScanMessage("");
+              setReceiptScanRawText("");
+              setHasAutoFilledReceipt(false);
+              setShowImagePreview(false);
               stopCamera();
             }}
             className={`flex-1 py-2 text-sm font-medium transition-colors ${
@@ -326,6 +653,8 @@ const MarkPaidModal: FC<MarkPaidModalProps> = ({
               setMethod("online");
               setAmountPaidInput("");
               setCameraError("");
+              setReceiptScanMessage("");
+              setReceiptScanRawText("");
             }}
             className={`flex-1 py-2 text-sm font-medium transition-colors ${
               method === "online"
@@ -366,115 +695,217 @@ const MarkPaidModal: FC<MarkPaidModalProps> = ({
         )}
 
         {method === "online" && (
-          <div className="mb-4">
-            <div className="mb-3 grid gap-2">
-              <div>
-                <label className="mb-1 block text-xs text-gray-400">Reference no.</label>
-                <input
-                  type="text"
-                  value={onlineReferenceNo}
-                  onChange={(e) => setOnlineReferenceNo(e.target.value)}
-                  placeholder="e.g. GCash/Maya reference"
-                  className="w-full rounded-lg border border-gray-700 bg-[#1F2937] px-3 py-2 text-sm text-gray-100 outline-none placeholder:text-gray-600 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20"
-                />
-                {!hasOnlineReference && (
-                  <p className="mt-1 text-xs text-red-400">Reference no. is required for online payment.</p>
-                )}
+          <div className="mb-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)] lg:items-start">
+            <div className="grid gap-3 rounded-xl border border-gray-700 bg-[#0B1220] p-3">
+              <div className="grid gap-2 rounded-xl border border-emerald-700/25 bg-emerald-950/10 p-3 text-xs text-gray-300">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-emerald-300">Payment Summary</p>
+                <div className="flex justify-between gap-3"><span className="text-gray-500">Customer</span><span className="text-right text-gray-100">{customerName}</span></div>
+                <div className="flex justify-between gap-3"><span className="text-gray-500">Court</span><span className="text-right text-gray-100">{courtName}</span></div>
+                <div className="flex justify-between gap-3"><span className="text-gray-500">Schedule</span><span className="text-right text-gray-100">{bookingDate} {formatTime12h(startTime)} - {formatTime12h(endTime)}</span></div>
+                <div className="flex justify-between gap-3 border-t border-emerald-700/20 pt-2"><span className="text-gray-500">Required</span><span className="text-right font-semibold text-emerald-300">₱{requiredAmount.toFixed(2)}</span></div>
               </div>
-              <div>
-                <label className="mb-1 block text-xs text-gray-400">Amount paid (online)</label>
-                <input
-                  type="number"
-                  min={0}
-                  step="0.01"
-                  value={onlineAmountInput}
-                  onChange={(e) => setOnlineAmountInput(e.target.value)}
-                  placeholder="e.g. 500"
-                  className="w-full rounded-lg border border-gray-700 bg-[#1F2937] px-3 py-2 text-sm text-gray-100 outline-none placeholder:text-gray-600 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20"
-                />
-                <p className="mt-1 text-xs text-gray-400">
-                  Required payment: <span className="font-semibold text-emerald-400">₱{requiredAmount.toFixed(2)}</span>
-                </p>
-                {onlineAmountInput && !hasValidOnlineAmount && (
-                  <p className="mt-1 text-xs text-red-400">Enter a valid online amount.</p>
-                )}
-                {hasValidOnlineAmount && !isOnlineEnough && (
-                  <p className="mt-1 text-xs text-red-400">Insufficient payment. Needs at least ₱{onlineShort.toFixed(2)} more.</p>
-                )}
-              </div>
-            </div>
 
-            <label className="block text-xs text-gray-400 mb-1">Upload payment screenshot</label>
+              {paymentSettings?.accountNumber || paymentSettings?.accountName ? (
+                <div className="grid gap-3 rounded-xl border border-emerald-700/30 bg-emerald-950/10 p-3 md:grid-cols-[1fr_auto] md:items-start">
+                  <div className="grid gap-1 text-xs text-gray-300">
+                    <div><span className="text-gray-500">Provider:</span> <span className="font-medium text-emerald-300">{paymentSettings.provider || "GCash"}</span></div>
+                    <div><span className="text-gray-500">Account Name:</span> <span className="font-medium text-gray-100">{paymentSettings.accountName || "-"}</span></div>
+                    <div><span className="text-gray-500">Account Number:</span> <span className="font-medium text-gray-100">{paymentSettings.accountNumber || "-"}</span></div>
+                    {paymentSettings.instructions ? (
+                      <div><span className="text-gray-500">Instructions:</span> {paymentSettings.instructions}</div>
+                    ) : null}
+                  </div>
+                  {paymentSettings.qrImage ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={paymentSettings.qrImage}
+                      alt="Official payment QR"
+                      className="h-24 w-24 rounded-lg border border-gray-700 bg-[#111827] object-contain p-1"
+                    />
+                  ) : null}
+                </div>
+              ) : null}
 
-            <div className="mb-2 flex gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  void startCamera();
-                }}
-                className="rounded-lg border border-gray-700 bg-[#1F2937] px-3 py-1.5 text-xs text-gray-200 hover:border-emerald-500"
-              >
-                Use Camera
-              </button>
-              {cameraOpen && (
-                <button
-                  type="button"
-                  onClick={stopCamera}
-                  className="rounded-lg border border-gray-700 bg-[#1F2937] px-3 py-1.5 text-xs text-gray-300 hover:text-red-400"
-                >
-                  Stop Camera
-                </button>
-              )}
-            </div>
-
-            {cameraOpen && (
-              <div className="mb-2 rounded-xl border border-gray-700 bg-[#0B1220] p-2">
-                <video
-                  ref={videoRef}
-                  className="h-44 w-full rounded-lg bg-black object-contain"
-                  autoPlay
-                  playsInline
-                  muted
-                />
-                <div className="mt-2 flex justify-end">
-                  <button
-                    type="button"
-                    onClick={captureFromCamera}
-                    className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700"
-                  >
-                    Capture Photo
-                  </button>
+              <div className="grid gap-2">
+                <div>
+                  <label className="mb-1 block text-xs text-gray-400">Reference no.</label>
+                  <input
+                    type="text"
+                    value={onlineReferenceNo}
+                    onChange={(e) => {
+                      setOnlineReferenceNo(e.target.value);
+                      setHasAutoFilledReceipt(false);
+                    }}
+                    placeholder="e.g. GCash/Maya reference"
+                    className="w-full rounded-lg border border-gray-700 bg-[#1F2937] px-3 py-2 text-sm text-gray-100 outline-none placeholder:text-gray-600 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20"
+                  />
+                  {!hasOnlineReference && (
+                    <p className="mt-1 text-xs text-red-400">Reference no. is required for online payment.</p>
+                  )}
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs text-gray-400">Amount paid (online)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={onlineAmountInput}
+                    onChange={(e) => {
+                      setOnlineAmountInput(e.target.value);
+                      setHasAutoFilledReceipt(false);
+                    }}
+                    placeholder="e.g. 500"
+                    className="w-full rounded-lg border border-gray-700 bg-[#1F2937] px-3 py-2 text-sm text-gray-100 outline-none placeholder:text-gray-600 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20"
+                  />
+                  <p className="mt-1 text-xs text-gray-400">
+                    Required payment: <span className="font-semibold text-emerald-400">₱{requiredAmount.toFixed(2)}</span>
+                  </p>
+                  {onlineAmountInput && !hasValidOnlineAmount && (
+                    <p className="mt-1 text-xs text-red-400">Enter a valid online amount.</p>
+                  )}
+                  {hasValidOnlineAmount && !isOnlineEnough && (
+                    <p className="mt-1 text-xs text-red-400">Insufficient payment. Needs at least ₱{onlineShort.toFixed(2)} more.</p>
+                  )}
                 </div>
               </div>
-            )}
 
-            <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-dashed border-gray-700 rounded-xl cursor-pointer hover:border-emerald-500 transition-colors bg-[#1F2937] relative overflow-hidden">
-              {imagePreview ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={imagePreview} alt="Payment proof" className="absolute inset-0 w-full h-full object-contain p-1" />
-              ) : (
-                <span className="text-xs text-gray-500 text-center px-4">
-                  Click to upload<br />(JPG, PNG, GIF · max 5 MB)
-                </span>
+              {hasAutoFilledReceipt && (
+                <p className="text-xs text-emerald-300">Auto-detected from receipt. Please verify before submitting.</p>
               )}
-              <input
-                type="file"
-                accept="image/*"
-                className="sr-only"
-                onChange={handleFile}
-              />
-            </label>
-            {imageError && <p className="mt-1 text-xs text-red-400">{imageError}</p>}
-            {cameraError && <p className="mt-1 text-xs text-red-400">{cameraError}</p>}
-            {imagePreview && (
-              <button
-                type="button"
-                onClick={() => { setImagePreview(null); }}
-                className="mt-1 text-xs text-gray-500 hover:text-red-400"
-              >
-                Remove image
-              </button>
-            )}
+            </div>
+
+            <div className="grid gap-3 rounded-xl border border-gray-700 bg-[#0B1220] p-3">
+              <div>
+                <label className="mb-1 block text-xs text-gray-400">Upload payment screenshot</label>
+
+                <div className="mb-2 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void startCamera();
+                    }}
+                    className="rounded-lg border border-gray-700 bg-[#1F2937] px-3 py-1.5 text-xs text-gray-200 hover:border-emerald-500"
+                  >
+                    Use Camera
+                  </button>
+                  {cameraOpen && (
+                    <button
+                      type="button"
+                      onClick={stopCamera}
+                      className="rounded-lg border border-gray-700 bg-[#1F2937] px-3 py-1.5 text-xs text-gray-300 hover:text-red-400"
+                    >
+                      Stop Camera
+                    </button>
+                  )}
+                </div>
+
+                {cameraOpen && (
+                  <div className="mb-2 rounded-xl border border-gray-700 bg-[#111827] p-2">
+                    <video
+                      ref={videoRef}
+                      className="h-44 w-full rounded-lg bg-black object-contain"
+                      autoPlay
+                      playsInline
+                      muted
+                    />
+                    <div className="mt-2 flex justify-end">
+                      <button
+                        type="button"
+                        onClick={captureFromCamera}
+                        className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700"
+                      >
+                        Capture Photo
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                <label className="flex h-40 w-full cursor-pointer flex-col items-center justify-center overflow-hidden rounded-xl border-2 border-dashed border-gray-700 bg-[#1F2937] relative transition-colors hover:border-emerald-500">
+                  {imagePreview ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          setShowImagePreview(true);
+                        }}
+                        className="absolute inset-0 z-10 block cursor-zoom-in"
+                        aria-label="Open larger payment proof preview"
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={imagePreview} alt="Payment proof" className="absolute inset-0 h-full w-full object-contain p-1" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          setImagePreview(null);
+                          setImageError("");
+                          setReceiptScanMessage("");
+                          setReceiptScanRawText("");
+                          setHasAutoFilledReceipt(false);
+                          setShowImagePreview(false);
+                        }}
+                        className="absolute right-2 top-2 z-20 inline-flex h-6 w-6 items-center justify-center rounded-full border border-gray-600 bg-black/65 text-xs text-white hover:border-red-400 hover:text-red-300"
+                        aria-label="Remove uploaded payment proof"
+                      >
+                        X
+                      </button>
+                    </>
+                  ) : (
+                    <span className="px-4 text-center text-xs text-gray-500">
+                      Click to upload<br />(JPG, PNG, GIF · max 5 MB)
+                    </span>
+                  )}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="sr-only"
+                    onChange={handleFile}
+                  />
+                </label>
+              </div>
+
+              {imageError && <p className="text-xs text-red-400">{imageError}</p>}
+              {cameraError && <p className="text-xs text-red-400">{cameraError}</p>}
+              {receiptScanMessage && <p className="text-xs text-gray-400">{receiptScanMessage}</p>}
+              {receiptScanRawText && (
+                <details className="rounded-lg border border-gray-700 bg-[#111827] p-3">
+                  <summary className="cursor-pointer text-xs font-semibold text-emerald-300">OCR debug text</summary>
+                  <p className="mt-2 text-[11px] text-gray-400">This is the raw text detected from the uploaded receipt.</p>
+                  <pre className="mt-2 max-h-44 overflow-y-auto whitespace-pre-wrap wrap-break-word text-[11px] leading-5 text-gray-200">
+                    {receiptScanRawText}
+                  </pre>
+                </details>
+              )}
+              {imagePreview && (
+                <div className="flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setShowImagePreview(true)}
+                    className="text-xs text-emerald-300 hover:text-emerald-200"
+                  >
+                    Enlarge preview
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setImagePreview(null); setReceiptScanMessage(""); setReceiptScanRawText(""); setHasAutoFilledReceipt(false); setShowImagePreview(false); }}
+                    className="text-xs text-gray-500 hover:text-red-400"
+                  >
+                    Remove image
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => imagePreview ? void scanReceiptImageData(imagePreview) : undefined}
+                    disabled={isScanningReceipt}
+                    className="rounded-lg border border-gray-700 bg-[#1F2937] px-2.5 py-1 text-xs text-gray-300 hover:border-emerald-500 disabled:opacity-50"
+                  >
+                    {isScanningReceipt ? "Scanning..." : "Retry scan"}
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -503,17 +934,125 @@ const MarkPaidModal: FC<MarkPaidModalProps> = ({
                 return;
               }
 
-              onConfirm({
-                paymentMethod: "online",
-                paymentReference: `Online ref ${onlineReferenceNo.trim()} | Amount paid ₱${onlineAmountPaid.toFixed(2)} | Required ₱${requiredAmount.toFixed(2)} | Date ${new Date().toLocaleDateString()}`,
-                paymentProofImage: imagePreview,
-              });
+              setShowOnlineConfirm(true);
             }}
             className="px-4 py-2 text-sm font-medium rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {loading ? "Saving…" : "Confirm payment"}
           </button>
         </div>
+
+        {showOnlineConfirm && (
+          <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/60 p-4">
+            <div className="w-full max-w-lg rounded-xl border border-gray-700 bg-[#0B0F1A] p-5 shadow-2xl">
+              <h4 className="mb-1 text-sm font-semibold text-gray-100">Confirm Online Payment</h4>
+              <p className="mb-3 text-xs text-gray-500">Review the payment details and receipt before recording.</p>
+
+              <div className="rounded-lg border border-gray-700 bg-[#111827] p-3 text-xs text-gray-300">
+                <div className="mb-2 border-b border-gray-700 pb-2 text-center">
+                  <p className="text-sm font-semibold tracking-wide text-emerald-400">Online Payment Summary</p>
+                  <p className="mt-0.5 text-[10px] font-semibold tracking-[0.12em] text-gray-400">PAYMENT CONFIRMATION</p>
+                </div>
+
+                <div className="grid gap-1">
+                  <div className="flex justify-between"><span className="text-gray-500">Date/Time</span><span>{new Date().toLocaleString()}</span></div>
+                  <div className="flex justify-between"><span className="text-gray-500">Processed by</span><span>{cashierName}</span></div>
+                  <div className="flex justify-between"><span className="text-gray-500">Customer</span><span>{customerName}</span></div>
+                  <div className="flex justify-between"><span className="text-gray-500">Court</span><span>{courtName}</span></div>
+                  <div className="flex justify-between"><span className="text-gray-500">Schedule</span><span>{bookingDate} {formatTime12h(startTime)} – {formatTime12h(endTime)}</span></div>
+                  <div className="flex justify-between"><span className="text-gray-500">Reference No.</span><span className="font-mono text-emerald-300">{onlineReferenceNo.trim() || "—"}</span></div>
+                </div>
+
+                <div className="mt-3 border-t border-dashed border-gray-700 pt-2">
+                  {(() => {
+                    const [sh, sm] = startTime.split(":").map(Number);
+                    const [eh, em] = endTime.split(":").map(Number);
+                    const dur = Math.max(0, (eh * 60 + em) - (sh * 60 + sm)) / 60;
+                    const rate = dur > 0 ? requiredAmount / dur : 0;
+                    return (
+                      <div className="mb-2 flex items-center justify-between text-[11px] text-gray-400">
+                        <span>Calculation</span>
+                        <span className="font-mono">{dur.toFixed(1)} hr{dur !== 1 ? "s" : ""} × ₱{rate.toFixed(2)}/hr = ₱{requiredAmount.toFixed(2)}</span>
+                      </div>
+                    );
+                  })()}
+                  <div className="flex justify-between"><span>Required</span><span>₱{requiredAmount.toFixed(2)}</span></div>
+                  <div className="flex justify-between"><span>Amount Paid</span><span>₱{onlineAmountPaid.toFixed(2)}</span></div>
+                  {onlineChange > 0 && (
+                    <div className="mt-1 flex justify-between font-semibold text-emerald-400"><span>Change</span><span>₱{onlineChange.toFixed(2)}</span></div>
+                  )}
+                  {onlineAmountPaid >= requiredAmount ? (
+                    <div className="mt-1 flex justify-between font-semibold text-emerald-400"><span>Status</span><span>Sufficient ✓</span></div>
+                  ) : (
+                    <div className="mt-1 flex justify-between font-semibold text-red-400"><span>Short by</span><span>₱{(requiredAmount - onlineAmountPaid).toFixed(2)}</span></div>
+                  )}
+                </div>
+
+                {imagePreview && (
+                  <div className="mt-3 border-t border-gray-700 pt-2">
+                    <p className="mb-1.5 text-[11px] text-gray-400">Payment proof</p>
+                    <div className="relative">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={imagePreview}
+                        alt="Payment proof"
+                        className="max-h-48 w-full cursor-pointer rounded-lg border border-gray-700 object-contain"
+                        onClick={() => setShowImagePreview(true)}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowOnlineConfirm(false);
+                          setImagePreview(null);
+                          setImageError("");
+                          setReceiptScanMessage("");
+                          setReceiptScanRawText("");
+                          setHasAutoFilledReceipt(false);
+                          setShowImagePreview(false);
+                        }}
+                        className="absolute right-2 top-2 inline-flex h-6 w-6 items-center justify-center rounded-full border border-gray-600 bg-black/65 text-xs text-white hover:border-red-400 hover:text-red-300"
+                        aria-label="Remove uploaded payment proof"
+                      >
+                        X
+                      </button>
+                    </div>
+                    <p className="mt-1 text-center text-[10px] text-gray-600">Click to enlarge</p>
+                  </div>
+                )}
+              </div>
+
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowOnlineConfirm(false)}
+                  className="rounded-lg border border-gray-700 bg-[#1F2937] px-3 py-2 text-xs text-gray-300 hover:bg-gray-700"
+                >
+                  Back
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const displayedReference = onlineReferenceNo.trim().slice(0, 40);
+                    const normalizedReference = normalizeReferenceForStorage(displayedReference) || displayedReference;
+                    const referenceLabel =
+                      displayedReference && displayedReference !== normalizedReference
+                        ? `${normalizedReference} (display: ${displayedReference})`
+                        : normalizedReference;
+                    setShowOnlineConfirm(false);
+                    onConfirm({
+                      paymentMethod: "online",
+                      paymentReference: `Online ref ${referenceLabel} | Amount paid ₱${onlineAmountPaid.toFixed(2)} | Required ₱${requiredAmount.toFixed(2)}${onlineChange > 0 ? ` | Change ₱${onlineChange.toFixed(2)}` : ""} | Date ${new Date().toLocaleDateString()}`,
+                      paymentProofImage: imagePreview,
+                    });
+                  }}
+                  className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700"
+                >
+                  Confirm payment
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {showReceiptPreview && (
           <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/60 p-4">
@@ -583,6 +1122,27 @@ const MarkPaidModal: FC<MarkPaidModalProps> = ({
             </div>
           </div>
         )}
+
+        {showImagePreview && imagePreview && (
+          <div className="fixed inset-0 z-70 flex items-center justify-center bg-black/80 p-4" onClick={() => setShowImagePreview(false)}>
+            <div className="w-full max-w-5xl" onClick={(event) => event.stopPropagation()}>
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <p className="text-xs text-emerald-300">Enlarged payment proof</p>
+                <button
+                  type="button"
+                  onClick={() => setShowImagePreview(false)}
+                  className="rounded-lg border border-gray-700 bg-[#1F2937] px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700"
+                >
+                  Close preview
+                </button>
+              </div>
+              <div className="rounded-2xl border border-emerald-700/30 bg-[#0B0F1A] p-3">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={imagePreview} alt="Enlarged payment proof" className="max-h-[82vh] w-full rounded-xl object-contain" />
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -644,17 +1204,19 @@ function playNewRequestAlert(): void {
   }
 }
 
-function useCountdown(bookingDate: string, endTime: string): number {
+function useCountdown(targetTimeMs: number | null): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, []);
-  return new Date(`${bookingDate}T${endTime}:00`).getTime() - now;
+  return targetTimeMs === null ? 0 : targetTimeMs - now;
 }
 
-const CourtTimer: FC<{ bookingDate: string; endTime: string; onExpired?: () => void }> = ({ bookingDate, endTime, onExpired }) => {
-  const diffMs = useCountdown(bookingDate, endTime);
+const CourtTimer: FC<{ sessionStartedAt: string; startTime: string; endTime: string; onExpired?: () => void }> = ({ sessionStartedAt, startTime, endTime, onExpired }) => {
+  const durationMs = Math.max(0, (toMinutes(endTime) - toMinutes(startTime)) * 60 * 1000);
+  const targetTimeMs = durationMs > 0 ? new Date(sessionStartedAt).getTime() + durationMs : null;
+  const diffMs = useCountdown(targetTimeMs);
   const firedRef = useRef(false);
 
   useEffect(() => {
@@ -709,6 +1271,20 @@ const PaymentBadge: FC<{ booking: Booking }> = ({ booking }) => {
   );
 };
 
+const SessionBadge: FC<{ booking: Booking }> = ({ booking }) => {
+  let label = "Not started";
+  let className = "bg-slate-700/50 text-slate-200 ring-1 ring-slate-600";
+
+  if (booking.sessionStartedAt && !booking.sessionEndedAt) {
+    label = "Running";
+    className = "bg-amber-500/20 text-amber-300 ring-1 ring-amber-500/40";
+  } else if (booking.sessionStartedAt && booking.sessionEndedAt) {
+    label = "Ended";
+    className = "bg-indigo-500/20 text-indigo-300 ring-1 ring-indigo-500/40";
+  }
+
+  return <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium ${className}`}>{label}</span>;
+};
 // ---------------------------------------------------------------------------
 // Error alert modal
 // ---------------------------------------------------------------------------
@@ -773,6 +1349,8 @@ function parsePaymentReference(paymentReference?: string | null): Array<{ label:
 }
 
 const PaymentDetailsModal: FC<{ booking: Booking; onClose: () => void }> = ({ booking, onClose }) => {
+  const [paymentSettings, setPaymentSettings] = useState<PaymentSettings | null>(null);
+  const [showImagePreview, setShowImagePreview] = useState(false);
   const customer =
     typeof booking.customer === "object"
       ? booking.customer
@@ -780,6 +1358,31 @@ const PaymentDetailsModal: FC<{ booking: Booking; onClose: () => void }> = ({ bo
 
   const hasPaymentData = Boolean(booking.paymentReference || booking.paymentProofImage);
   const parsedPaymentReference = parsePaymentReference(booking.paymentReference);
+
+  useEffect(() => {
+    let mounted = true;
+    async function loadPaymentSettings(): Promise<void> {
+      try {
+        const response = await fetch('/api/admin/payment-settings', { credentials: 'include' });
+        if (!response.ok) {
+          return;
+        }
+        const body = (await response.json()) as { data?: PaymentSettings };
+        if (mounted) {
+          setPaymentSettings(body.data ?? null);
+        }
+      } catch {
+        if (mounted) {
+          setPaymentSettings(null);
+        }
+      }
+    }
+
+    void loadPaymentSettings();
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
@@ -820,23 +1423,71 @@ const PaymentDetailsModal: FC<{ booking: Booking; onClose: () => void }> = ({ bo
               <p className="whitespace-pre-wrap wrap-break-word text-gray-200">{booking.paymentReference || "No reference recorded."}</p>
             )}
           </div>
+          {paymentSettings?.accountNumber || paymentSettings?.accountName ? (
+            <div className="mt-1 border-t border-gray-700 pt-2">
+              <p className="mb-1 text-gray-500">Official Destination</p>
+              <div className="grid gap-1 rounded-lg border border-gray-700 bg-[#111827] p-3">
+                <div className="flex justify-between gap-3"><span className="text-gray-500">Provider</span><span className="font-medium text-gray-100">{paymentSettings.provider || '-'}</span></div>
+                <div className="flex justify-between gap-3"><span className="text-gray-500">Account Name</span><span className="font-medium text-gray-100">{paymentSettings.accountName || '-'}</span></div>
+                <div className="flex justify-between gap-3"><span className="text-gray-500">Account Number</span><span className="font-medium text-gray-100">{paymentSettings.accountNumber || '-'}</span></div>
+                {paymentSettings.instructions ? (
+                  <div className="mt-1 text-gray-400">{paymentSettings.instructions}</div>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
         </div>
 
         <div className="mt-3">
           <p className="mb-1 text-xs text-gray-500">Payment Proof</p>
           {booking.paymentProofImage ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={booking.paymentProofImage}
-              alt="Payment proof"
-              className="max-h-72 w-full rounded-lg border border-gray-700 bg-[#0B0F1A] object-contain"
-            />
+            <>
+              <button
+                type="button"
+                onClick={() => setShowImagePreview(true)}
+                className="block w-full cursor-zoom-in"
+                aria-label="Open larger payment proof preview"
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={booking.paymentProofImage}
+                  alt="Payment proof"
+                  className="max-h-72 w-full rounded-lg border border-gray-700 bg-[#0B0F1A] object-contain"
+                />
+              </button>
+              <p className="mt-1 text-xs text-emerald-300">Click the image to enlarge it.</p>
+            </>
           ) : (
             <div className="rounded-lg border border-gray-700 bg-[#0B0F1A] px-3 py-5 text-center text-xs text-gray-500">
               {hasPaymentData ? "No image proof attached." : "No payment details recorded yet."}
             </div>
           )}
         </div>
+
+        {showImagePreview && booking.paymentProofImage && (
+          <div className="fixed inset-0 z-70 flex items-center justify-center bg-black/80 p-4" onClick={() => setShowImagePreview(false)}>
+            <div className="w-full max-w-5xl" onClick={(event) => event.stopPropagation()}>
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <p className="text-xs text-emerald-300">Enlarged payment proof</p>
+                <button
+                  type="button"
+                  onClick={() => setShowImagePreview(false)}
+                  className="rounded-lg border border-gray-700 bg-[#1F2937] px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700"
+                >
+                  Close preview
+                </button>
+              </div>
+              <div className="rounded-2xl border border-emerald-700/30 bg-[#0B0F1A] p-3">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={booking.paymentProofImage}
+                  alt="Enlarged payment proof"
+                  className="max-h-[82vh] w-full rounded-xl object-contain"
+                />
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -852,6 +1503,7 @@ interface BookingActionsProps {
   courtName: string;
   customerName: string;
   requiredAmount: number;
+  currentStaffName?: string;
 }
 
 const BookingActions: FC<BookingActionsProps> = ({
@@ -861,23 +1513,21 @@ const BookingActions: FC<BookingActionsProps> = ({
   courtName,
   customerName,
   requiredAmount,
+  currentStaffName,
 }) => {
   const [loading, setLoading] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [showDenyModal, setShowDenyModal] = useState(false);
   const [showMarkPaidModal, setShowMarkPaidModal] = useState(false);
 
-  async function updateStatus(
-    status: string,
-    extra: Record<string, unknown> = {}
-  ): Promise<void> {
+  async function updateBooking(extra: Record<string, unknown> = {}): Promise<void> {
     setLoading(true);
     setActionError(null);
     try {
       const res = await fetch(`/api/admin/bookings/${booking._id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status, ...extra }),
+        body: JSON.stringify(extra),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => null) as { error?: { message?: string } } | null;
@@ -891,9 +1541,37 @@ const BookingActions: FC<BookingActionsProps> = ({
     }
   }
 
+  async function updateStatus(
+    status: string,
+    extra: Record<string, unknown> = {}
+  ): Promise<void> {
+    await updateBooking({ status, ...extra });
+  }
+
+  function handleStartOrEndClick(): void {
+    if (isSessionRunning) {
+      void updateStatus("COMPLETE", { endSession: true });
+      return;
+    }
+
+    const today = localISODate();
+    const nowTime = currentTimeHHMM();
+    const isFutureDate = booking.bookingDate > today;
+    const isTooEarlyToday = booking.bookingDate === today && toMinutes(nowTime) < toMinutes(booking.startTime);
+
+    if (isFutureDate || isTooEarlyToday) {
+      setActionError("This session can only be started once the scheduled booking time begins.");
+      return;
+    }
+
+    void updateBooking({ startSession: true });
+  }
+
   const isPending   = booking.status === "PENDING";
   const isApproved  = booking.status === "APPROVED" || booking.status === "CONFIRMED";
   const isPaid      = booking.status === "PAID";
+  const isSessionRunning = Boolean(booking.sessionStartedAt && !booking.sessionEndedAt);
+  const hasSessionStarted = Boolean(booking.sessionStartedAt);
 
   if (!isPending && !isApproved && !isPaid) return null;
 
@@ -934,6 +1612,20 @@ const BookingActions: FC<BookingActionsProps> = ({
           <button
             type="button"
             disabled={loading}
+            onClick={handleStartOrEndClick}
+            className={`px-2.5 py-1 text-xs font-medium rounded-md disabled:opacity-50 ${
+              isSessionRunning
+                ? "bg-rose-600 text-white hover:bg-rose-700"
+                : "bg-amber-500 text-black hover:bg-amber-400"
+            }`}
+          >
+            {isSessionRunning ? "End" : "Start"}
+          </button>
+        )}
+        {isPaid && (
+          <button
+            type="button"
+            disabled={loading || !hasSessionStarted || isSessionRunning}
             onClick={() => void updateStatus("COMPLETE")}
             className="px-2.5 py-1 text-xs font-medium rounded-md bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50"
           >
@@ -973,7 +1665,7 @@ const BookingActions: FC<BookingActionsProps> = ({
           loading={loading}
           requiredAmount={requiredAmount}
           customerName={customerName}
-          staffAssignedName={booking.actionBy?.name ?? "Receptionist"}
+          staffAssignedName={currentStaffName || booking.actionBy?.name || "Receptionist"}
           courtName={courtName}
           bookingDate={booking.bookingDate}
           startTime={booking.startTime}
@@ -1036,7 +1728,7 @@ const StatusTabs: FC<StatusTabsProps> = ({ activeTab, counts, onChange }) => (
 // ---------------------------------------------------------------------------
 // Main table
 // ---------------------------------------------------------------------------
-export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef, restoreFnRef, onSelectionChange, searchCustomer = "", externalActiveTab }) => {
+export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef, restoreFnRef, onSelectionChange, searchCustomer = "", externalActiveTab, currentStaffName }) => {
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [loading, setLoading]   = useState(true);
   const [error, setError]       = useState<string | null>(null);
@@ -1483,15 +2175,29 @@ export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef,
                   <td className="px-4 py-3 text-gray-300 whitespace-nowrap">{b.bookingDate}</td>
                   <td className="px-4 py-3 text-gray-300 whitespace-nowrap">
                     <div>{formatTime12h(b.startTime)} – {formatTime12h(b.endTime)}</div>
-                    {b.status === "PAID" && (
+                    {b.sessionStartedAt && (
+                      <div className="mt-1 text-[11px] text-emerald-300">
+                        Started: {new Date(b.sessionStartedAt).toLocaleString()}
+                      </div>
+                    )}
+                    {b.status === "PAID" && b.sessionStartedAt && !b.sessionEndedAt && (
                       <CourtTimer
-                        bookingDate={b.bookingDate}
+                        sessionStartedAt={b.sessionStartedAt}
+                        startTime={b.startTime}
                         endTime={b.endTime}
                         onExpired={() => {
                           const customer = typeof b.customer === "object" ? b.customer.name : b.customer;
                           const court = courtNames[b.courtId] || b.courtId;
                           const label = `⏰ ${customer}'s session on ${court} has ended (${b.bookingDate} ${formatTime12h(b.startTime)}–${formatTime12h(b.endTime)}). Please clear the court.`;
                           playExpiryAlert();
+                          void fetch(`/api/admin/bookings/${b._id}`, {
+                            method: "PUT",
+                            credentials: "include",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ status: "COMPLETE", endSession: true }),
+                          }).finally(() => {
+                            void fetchBookings();
+                          });
                           setExpiredNotices((prev) =>
                             prev.some((n) => n.id === b._id)
                               ? prev
@@ -1514,7 +2220,10 @@ export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef,
                     </span>
                   </td>
                   <td className="px-4 py-3">
-                    <PaymentBadge booking={b} />
+                    <div className="flex flex-col items-start gap-1">
+                      <PaymentBadge booking={b} />
+                      <SessionBadge booking={b} />
+                    </div>
                   </td>
                   {showActionByCol && (
                     <td className="px-4 py-3 whitespace-nowrap">
@@ -1547,6 +2256,7 @@ export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef,
                         courtName={courtName}
                         customerName={customerName}
                         requiredAmount={requiredAmount}
+                        currentStaffName={currentStaffName}
                         onActionComplete={() => void fetchBookings()}
                       />
                     </td>

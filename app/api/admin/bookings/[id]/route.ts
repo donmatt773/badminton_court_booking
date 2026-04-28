@@ -10,6 +10,21 @@ import { graphQLEnv } from "@/lib/server/graphql/config/env";
 import { CourtModel } from "@/lib/server/graphql/models/Court";
 import { computeBookingPricing } from "@/lib/server/bookings/pricing";
 
+function localISODate(): string {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function currentTimeHHMM(): string {
+  const now = new Date();
+  const hours = String(now.getHours()).padStart(2, "0");
+  const minutes = String(now.getMinutes()).padStart(2, "0");
+  return `${hours}:${minutes}`;
+}
+
 const updateSchema = z.object({
   courtId: z.string().min(1).optional(),
   bookingDate: z.string().min(1).optional(),
@@ -22,6 +37,10 @@ const updateSchema = z.object({
   paymentReference: z.string().nullable().optional(),
   paymentMethod: z.enum(["cash", "online"]).nullable().optional(),
   paymentProofImage: z.string().nullable().optional(),
+  sessionStartedAt: z.string().datetime().nullable().optional(),
+  sessionEndedAt: z.string().datetime().nullable().optional(),
+  startSession: z.boolean().optional(),
+  endSession: z.boolean().optional(),
   expiresAt: z.string().datetime().nullable().optional(),
 });
 
@@ -110,6 +129,42 @@ export async function PUT(
       }
     }
 
+    if (body.startSession) {
+      if (existingBooking.status !== "PAID") {
+        return Response.json(
+          { error: { message: "Only paid bookings can be started" } },
+          { status: 409 }
+        );
+      }
+      if (existingBooking.sessionStartedAt && !existingBooking.sessionEndedAt) {
+        return Response.json(
+          { error: { message: "This booking session has already started" } },
+          { status: 409 }
+        );
+      }
+
+      const today = localISODate();
+      const nowTime = currentTimeHHMM();
+      const isFutureDate = existingBooking.bookingDate > today;
+      const isTooEarlyToday = existingBooking.bookingDate === today && existingBooking.startTime > nowTime;
+
+      if (isFutureDate || isTooEarlyToday) {
+        return Response.json(
+          { error: { message: "This session can only be started once the scheduled booking time begins" } },
+          { status: 409 }
+        );
+      }
+    }
+
+    if (body.endSession) {
+      if (!existingBooking.sessionStartedAt || existingBooking.sessionEndedAt) {
+        return Response.json(
+          { error: { message: "This booking session is not currently running" } },
+          { status: 409 }
+        );
+      }
+    }
+
     // Handle isArchived toggling (preferred over status: "ARCHIVED")
     const archivableStatuses = ["COMPLETE", "CANCELLED", "EXPIRED", "DENIED"];
     if (body.isArchived === true) {
@@ -125,6 +180,8 @@ export async function PUT(
     const updatePayload: Record<string, unknown> = {
       ...body,
     };
+    delete updatePayload.startSession;
+    delete updatePayload.endSession;
 
     const isSlotMutation =
       body.courtId !== undefined ||
@@ -162,6 +219,27 @@ export async function PUT(
     }
     delete updatePayload.confirmDenied;
 
+    if (body.startSession) {
+      updatePayload.sessionStartedAt = body.sessionStartedAt ? new Date(body.sessionStartedAt) : new Date();
+      updatePayload.sessionEndedAt = null;
+    }
+
+    if (body.endSession) {
+      updatePayload.sessionEndedAt = body.sessionEndedAt ? new Date(body.sessionEndedAt) : new Date();
+    }
+
+    if (body.status === "COMPLETE" && existingBooking.sessionStartedAt && !existingBooking.sessionEndedAt && !body.endSession) {
+      updatePayload.sessionEndedAt = new Date();
+    }
+
+    if (body.sessionStartedAt && !body.startSession) {
+      updatePayload.sessionStartedAt = new Date(body.sessionStartedAt);
+    }
+
+    if (body.sessionEndedAt && !body.endSession) {
+      updatePayload.sessionEndedAt = new Date(body.sessionEndedAt);
+    }
+
     if (body.status && body.status !== "DENIED") {
       updatePayload.denialReason = null;
     }
@@ -175,7 +253,7 @@ export async function PUT(
     }
 
     // Record which staff member performed the status change
-    if (body.status) {
+    if (body.status || body.startSession || body.endSession) {
       const actor = await UserModel.findById(session.userId).select("name username").lean();
       if (actor) {
         updatePayload.actionBy = {

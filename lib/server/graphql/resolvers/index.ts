@@ -123,6 +123,15 @@ export const resolvers = {
         const parsed = createBookingSchema.parse(args.input);
         assertValidTimeRange(parsed.startTime, parsed.endTime);
 
+        const now = new Date();
+        const nowDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+        const nowTime = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+        if (parsed.bookingDate === nowDate && parsed.startTime < nowTime) {
+          throw new GraphQLError("Start time cannot be in the past", {
+            extensions: { code: "BAD_USER_INPUT" },
+          });
+        }
+
         const court = await CourtModel.findOne({
           _id: parsed.courtId,
           status: "active",
@@ -147,7 +156,6 @@ export const resolvers = {
           });
         }
 
-        const now = new Date();
         const duplicateWindowMs = graphQLEnv.DUPLICATE_WINDOW_MINUTES * 60_000;
         const duplicateWindowStart = new Date(now.getTime() - duplicateWindowMs);
 
@@ -239,6 +247,7 @@ export const resolvers = {
           expiresAt,
           ...(parsed.paymentMethod ? { paymentMethod: parsed.paymentMethod } : {}),
           ...(parsed.paymentProofImage ? { paymentProofImage: parsed.paymentProofImage } : {}),
+          ...(parsed.paymentReference ? { paymentReference: parsed.paymentReference } : {}),
         });
 
         const populated = await booking.populate("customer");

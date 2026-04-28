@@ -55,6 +55,7 @@ type BookingInput = {
   endTime: string;
   paymentMethod: "cash" | "online";
   paymentProofImage: string;
+  paymentReference?: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -345,6 +346,7 @@ export default function BookingExperience() {
   const [statusMessage, setStatusMessage] = useState("");
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [reservationStep, setReservationStep] = useState<1 | 2>(1);
+  const [isSubmittingRequest, setIsSubmittingRequest] = useState(false);
   const [courtsPage, setCourtsPage] = useState(1);
   const COURTS_PER_PAGE = 6;
 
@@ -428,6 +430,7 @@ export default function BookingExperience() {
 
   const refetchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isRefetchingFromRealtimeRef = useRef(false);
+  const submitRequestLockRef = useRef(false);
 
   useEffect(() => {
     const pusher = getPusherClient();
@@ -478,7 +481,10 @@ export default function BookingExperience() {
   // Close modal on Escape
   useEffect(() => {
     if (!isModalOpen) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setIsModalOpen(false); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setIsModalOpen(false);
+    };
     document.body.style.overflow = "hidden";
     window.addEventListener("keydown", onKey);
     return () => {
@@ -533,6 +539,10 @@ export default function BookingExperience() {
 
   async function onSubmit(e: FormEvent<HTMLFormElement>): Promise<void> {
     e.preventDefault();
+    if (submitRequestLockRef.current) {
+      return;
+    }
+
     if (reservationStep !== 2) {
       return;
     }
@@ -542,23 +552,33 @@ export default function BookingExperience() {
       setSubmissionErrorMessage(stepOneError);
       return;
     }
-    if (form.paymentMethod === "online" && !form.paymentProofImage) {
-      setSubmissionErrorMessage("Please upload a screenshot of your online payment.");
-      return;
-    }
     setSubmissionErrorMessage("");
     setStatusMessage("");
+    submitRequestLockRef.current = true;
+    setIsSubmittingRequest(true);
     try {
       await Promise.all(
         selectedCourtIds.map((cId) =>
-          createBooking({ variables: { input: { ...form, courtId: cId } } })
+          createBooking({
+            variables: {
+              input: {
+                ...form,
+                courtId: cId,
+                paymentMethod: "cash",
+                paymentProofImage: "",
+              },
+            },
+          })
         )
       );
-      setStatusMessage("Reservation submitted! Your slot is pending admin approval.");
+      setStatusMessage("Reservation submitted successfully. Please wait for receptionist approval before sending payment screenshot via Messenger.");
       setIsModalOpen(false);
       await refetch();
     } catch (error) {
       setSubmissionErrorMessage(getErrorMessage(error, "Booking could not be submitted."));
+    } finally {
+      submitRequestLockRef.current = false;
+      setIsSubmittingRequest(false);
     }
   }
 
@@ -854,14 +874,18 @@ export default function BookingExperience() {
           }}
         >
           {courts.slice((courtsPage - 1) * COURTS_PER_PAGE, courtsPage * COURTS_PER_PAGE).map((court) => {
-            const bookedStarts = bookings
-              .filter(
-                (b) =>
-                  b.courtId === court.id &&
-                  !["EXPIRED", "CANCELLED", "DENIED", "ARCHIVED"].includes(b.status) &&
-                  !b.isArchived
-              )
-              .map((b) => b.startTime);
+            const activeCourtBookings = bookings.filter(
+              (b) =>
+                b.courtId === court.id &&
+                ["PENDING", "CONFIRMED", "PAID", "APPROVED"].includes(b.status) &&
+                !b.isArchived
+            );
+            const bookedStarts = ALL_SLOTS.filter((slotStart) => {
+              const slotEnd = addHour(slotStart);
+              return activeCourtBookings.some((booking) =>
+                rangesOverlap(slotStart, slotEnd, booking.startTime, booking.endTime)
+              );
+            });
             const courtBlocks = blockedSlots.filter((slot) => slot.courtId === court.id);
             const blockedStarts = ALL_SLOTS.filter((slotStart) => {
               const slotEnd = addHour(slotStart);
@@ -1115,7 +1139,7 @@ export default function BookingExperience() {
             onClick={(e) => e.stopPropagation()}
             style={{
               width: "100%",
-              maxWidth: "min(600px, calc(100vw - 24px))",
+              maxWidth: reservationStep === 2 ? "min(980px, calc(100vw - 24px))" : "min(600px, calc(100vw - 24px))",
               maxHeight: "calc(100dvh - 20px)",
               overflowY: "auto",
               background: "var(--color-background-primary)",
@@ -1247,10 +1271,10 @@ export default function BookingExperience() {
                     </span>
                     <div style={{ display: "grid", gap: 1 }}>
                       <span style={{ fontSize: 11, fontWeight: 600, color: "var(--color-text-primary)" }}>
-                        {step === 1 ? "Schedule" : "Details & payment"}
+                        {step === 1 ? "Schedule" : "Details & approval"}
                       </span>
                       <span style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>
-                        {step === 1 ? "Pick date and time" : "Contact info and payment method"}
+                        {step === 1 ? "Pick date and time" : "Contact info and approval flow"}
                       </span>
                     </div>
                   </div>
@@ -1317,7 +1341,7 @@ export default function BookingExperience() {
                       <div key={rowIdx} style={{ display: "flex", marginBottom: rowIdx === 0 ? 14 : 0 }}>
                         {rowSlots.map((slotStart, idx) => {
                           const slotEnd = addHour(slotStart);
-                          const isPast = form.bookingDate === todayISODate() && slotEnd <= currentTimeHHMM();
+                          const isPast = form.bookingDate === todayISODate() && slotStart < currentTimeHHMM();
                           const isTaken = hasConflict(slotStart, slotEnd);
                           const isInRange = !!(form.startTime && form.endTime && slotStart >= form.startTime && slotEnd <= form.endTime);
                           const isStartSlot = form.startTime === slotStart;
@@ -1426,93 +1450,89 @@ export default function BookingExperience() {
               const totalPricePerHour = selectedCourts.reduce((sum, c) => sum + (c.price ?? 0), 0);
               const total = totalPricePerHour * hours;
               const hasSelection = durationMinutes > 0;
+              const sectionCardStyle: React.CSSProperties = {
+                borderRadius: "var(--border-radius-md)",
+                border: "1px solid var(--color-border-tertiary)",
+                background: "var(--color-background-secondary)",
+                padding: "10px",
+                display: "grid",
+                gap: 10,
+                alignContent: "start",
+              };
               return (
-                <div style={{ marginBottom: 10 }}>
-                  <div style={{ marginBottom: 10, display: "grid", gap: 8 }}>
-                    <label style={labelStyle}>
-                      Name
-                      <input
-                        style={inputStyle}
-                        required
-                        minLength={2}
-                        placeholder="Alex Gonzalez"
-                        value={form.name}
-                        onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
-                      />
-                    </label>
+                <div
+                  style={{
+                    marginBottom: 10,
+                    display: "grid",
+                    gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+                    gap: 12,
+                    alignItems: "start",
+                  }}
+                >
+                  <div style={sectionCardStyle}>
+                    <div style={{ display: "grid", gap: 8 }}>
+                      <label style={labelStyle}>
+                        Name
+                        <input
+                          style={inputStyle}
+                          required
+                          minLength={2}
+                          placeholder="Alex Gonzalez"
+                          value={form.name}
+                          onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
+                        />
+                      </label>
 
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                      <label style={labelStyle}>
-                        Contact number
-                        <input
-                          style={inputStyle}
-                          required
-                          minLength={7}
-                          placeholder="0917 123 4567"
-                          value={form.contactNumber}
-                          onChange={(e) => setForm((p) => ({ ...p, contactNumber: e.target.value }))}
-                        />
-                      </label>
-                      <label style={labelStyle}>
-                        Gmail address
-                        <input
-                          style={inputStyle}
-                          required
-                          type="email"
-                          placeholder="you@gmail.com"
-                          value={form.email}
-                          onChange={(e) => setForm((p) => ({ ...p, email: e.target.value }))}
-                        />
-                      </label>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8 }}>
+                        <label style={labelStyle}>
+                          Contact number
+                          <input
+                            style={inputStyle}
+                            required
+                            minLength={7}
+                            placeholder="0917 123 4567"
+                            value={form.contactNumber}
+                            onChange={(e) => setForm((p) => ({ ...p, contactNumber: e.target.value }))}
+                          />
+                        </label>
+                        <label style={labelStyle}>
+                          Gmail address
+                          <input
+                            style={inputStyle}
+                            required
+                            type="email"
+                            placeholder="you@gmail.com"
+                            value={form.email}
+                            onChange={(e) => setForm((p) => ({ ...p, email: e.target.value }))}
+                          />
+                        </label>
+                      </div>
                     </div>
+
+                    <div style={{ display: "grid", gap: 6 }}>
+                      <p style={{ margin: "0", fontSize: 13, fontWeight: 500, color: "var(--color-text-primary)" }}>
+                        Payment handling
+                      </p>
+                      <p style={{ margin: 0, fontSize: 12, color: "var(--color-text-secondary)" }}>
+                        Wait for receptionist approval first. After approval, send your payment screenshot via Messenger.
+                      </p>
+                    </div>
+
                   </div>
 
-                  {/* Method toggle */}
-                  <p style={{ margin: "0 0 8px", fontSize: 13, fontWeight: 500, color: "var(--color-text-primary)" }}>
-                    Payment method
-                  </p>
-                  <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-                    {(["cash", "online"] as const).map((method) => (
-                      <button
-                        key={method}
-                        type="button"
-                        onClick={() => setForm((p) => ({ ...p, paymentMethod: method, paymentProofImage: "" }))}
-                        style={{
-                          flex: 1,
-                          padding: "7px",
-                          fontSize: 13,
-                          fontWeight: 600,
-                          borderRadius: "var(--border-radius-md)",
-                          border: form.paymentMethod === method ? "1.5px solid #10B981" : "1px solid var(--color-border-secondary)",
-                          background: form.paymentMethod === method ? "rgba(16,185,129,0.12)" : "var(--color-background-secondary)",
-                          color: form.paymentMethod === method ? "#10B981" : "var(--color-text-secondary)",
-                          cursor: "pointer",
-                          transition: "all 0.15s",
-                          textTransform: "capitalize",
-                        }}
-                      >
-                        {method === "cash" ? "💵 Cash on Arrival" : "📱 Online Payment"}
-                      </button>
-                    ))}
-                  </div>
-
-                  {/* Cash: price breakdown */}
-                  {form.paymentMethod === "cash" && (
+                  <div style={sectionCardStyle}>
                     <div
                       style={{
                         borderRadius: "var(--border-radius-md)",
                         border: hasSelection ? "1px solid rgba(16,185,129,0.35)" : "1px solid var(--color-border-tertiary)",
-                        background: hasSelection ? "rgba(16,185,129,0.07)" : "var(--color-background-secondary)",
+                        background: hasSelection ? "rgba(16,185,129,0.07)" : "var(--color-background-primary)",
                         padding: "8px 10px",
                         opacity: hasSelection ? 1 : 0.55,
                         transition: "all 0.2s",
                       }}
                     >
                       <p style={{ margin: "0 0 8px", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: hasSelection ? "#6EE7B7" : "var(--color-text-secondary)" }}>
-                        Payment on arrival
-                      </p>
-                      <p style={{ margin: "0 0 8px", fontSize: 12, color: "var(--color-text-secondary)" }}>
-                        No upfront payment required. Confirm now and pay at the front desk when you arrive.
+                        Booking summary
                       </p>
                       {!hasSelection ? (
                         <p style={{ margin: 0, fontSize: 12, color: "var(--color-text-secondary)" }}>
@@ -1526,6 +1546,14 @@ export default function BookingExperience() {
                               <span>₱{(c.price ?? 0).toFixed(2)} / hr</span>
                             </div>
                           ))}
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 12, color: "var(--color-text-secondary)" }}>
+                            <span>Selected courts</span>
+                            <span style={{ color: "#E2E8F0", textAlign: "right" }}>{selectedCourts.map((court) => court.name).join(", ") || "—"}</span>
+                          </div>
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 12, color: "var(--color-text-secondary)" }}>
+                            <span>Schedule</span>
+                            <span style={{ color: "#E2E8F0" }}>{form.bookingDate} · {formatHour(form.startTime)} - {formatHour(form.endTime)}</span>
+                          </div>
                           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--color-text-secondary)", marginBottom: 4 }}>
                             <span>Hourly rate{selectedCourts.length > 1 ? " (combined)" : ""}</span>
                             <span>₱{totalPricePerHour.toFixed(2)} / hr</span>
@@ -1535,101 +1563,16 @@ export default function BookingExperience() {
                             <span>{Math.floor(durationMinutes / 60)}h {durationMinutes % 60}m</span>
                           </div>
                           <div style={{ borderTop: "1px solid rgba(16,185,129,0.2)", paddingTop: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                            <span style={{ fontSize: 13, fontWeight: 600, color: "var(--color-text-primary)" }}>Amount due on arrival</span>
+                            <span style={{ fontSize: 13, fontWeight: 600, color: "var(--color-text-primary)" }}>Estimated amount</span>
                             <span style={{ fontSize: 18, fontWeight: 700, color: "#10B981" }}>₱{total.toFixed(2)}</span>
                           </div>
                           <p style={{ margin: "6px 0 0", fontSize: 11, color: "var(--color-text-secondary)" }}>
-                            Bring exact amount if possible for faster check-in.
+                            Wait for approval first. Payment screenshot is sent via Messenger and encoded by receptionist.
                           </p>
                         </>
                       )}
                     </div>
-                  )}
-
-                  {/* Online: proof upload */}
-                  {form.paymentMethod === "online" && (
-                    <div
-                      style={{
-                        borderRadius: "var(--border-radius-md)",
-                        border: form.paymentProofImage ? "1px solid rgba(16,185,129,0.35)" : "1px solid var(--color-border-tertiary)",
-                        background: "var(--color-background-secondary)",
-                        padding: "8px 10px",
-                      }}
-                    >
-                      <p style={{ margin: "0 0 4px", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: "#6EE7B7" }}>
-                        Payment proof
-                      </p>
-                      <p style={{ margin: "0 0 10px", fontSize: 12, color: "var(--color-text-secondary)" }}>
-                        Transfer payment to our GCash/online account, then upload a screenshot below. Staff will verify and record the amount.
-                      </p>
-                      <label
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          gap: 8,
-                          padding: "7px",
-                          borderRadius: "var(--border-radius-md)",
-                          border: "1.5px dashed rgba(16,185,129,0.4)",
-                          cursor: "pointer",
-                          fontSize: 13,
-                          color: "#6EE7B7",
-                          background: "rgba(16,185,129,0.05)",
-                        }}
-                      >
-                        📎 {form.paymentProofImage ? "Change screenshot" : "Upload payment screenshot"}
-                        <input
-                          type="file"
-                          accept="image/*"
-                          style={{ display: "none" }}
-                          onChange={(e) => {
-                            const file = e.target.files?.[0];
-                            if (!file) return;
-                            if (file.size > 3 * 1024 * 1024) {
-                              setSubmissionErrorMessage("Image must be under 3 MB.");
-                              return;
-                            }
-                            const reader = new FileReader();
-                            reader.onload = () => {
-                              setForm((p) => ({ ...p, paymentProofImage: reader.result as string }));
-                              setSubmissionErrorMessage("");
-                            };
-                            reader.readAsDataURL(file);
-                          }}
-                        />
-                      </label>
-                      {form.paymentProofImage && (
-                        <div style={{ marginTop: 8, position: "relative" }}>
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src={form.paymentProofImage}
-                            alt="Payment proof"
-                            style={{ width: "100%", maxHeight: 112, objectFit: "contain", borderRadius: "var(--border-radius-md)", border: "1px solid rgba(16,185,129,0.25)" }}
-                          />
-                          <button
-                            type="button"
-                            onClick={() => setForm((p) => ({ ...p, paymentProofImage: "" }))}
-                            style={{
-                              position: "absolute",
-                              top: 6,
-                              right: 6,
-                              background: "rgba(0,0,0,0.6)",
-                              border: "none",
-                              borderRadius: "50%",
-                              width: 24,
-                              height: 24,
-                              fontSize: 12,
-                              color: "#fff",
-                              cursor: "pointer",
-                              display: "flex",
-                              alignItems: "center",
-                              justifyContent: "center",
-                            }}
-                          >✕</button>
-                        </div>
-                      )}
-                    </div>
-                  )}
+                  </div>
                 </div>
               );
             })()}
@@ -1656,6 +1599,7 @@ export default function BookingExperience() {
                 {reservationStep === 2 && (
                   <button
                     type="button"
+                    disabled={isSubmittingRequest}
                     onClick={() => {
                       setSubmissionErrorMessage("");
                       setReservationStep(1);
@@ -1667,9 +1611,10 @@ export default function BookingExperience() {
                       fontWeight: 600,
                       borderRadius: "var(--border-radius-md)",
                       border: "1px solid var(--color-border-secondary)",
-                      cursor: "pointer",
+                      cursor: isSubmittingRequest ? "not-allowed" : "pointer",
                       background: "var(--color-background-secondary)",
                       color: "var(--color-text-primary)",
+                      opacity: isSubmittingRequest ? 0.65 : 1,
                     }}
                   >
                     Back
@@ -1696,12 +1641,12 @@ export default function BookingExperience() {
                       boxShadow: "0 3px 16px rgba(16,185,129,0.4)",
                     }}
                   >
-                    Continue to payment
+                    Continue to details
                   </button>
                 ) : (
                   <button
                     type="submit"
-                    disabled={isSubmitting || !form.startTime || !form.endTime}
+                    disabled={isSubmittingRequest || isSubmitting || !form.startTime || !form.endTime}
                     style={{
                       flex: 1,
                       padding: "11px",
@@ -1709,15 +1654,15 @@ export default function BookingExperience() {
                       fontWeight: 600,
                       borderRadius: "var(--border-radius-md)",
                       border: "none",
-                      cursor: isSubmitting || !form.startTime || !form.endTime ? "not-allowed" : "pointer",
+                      cursor: isSubmittingRequest || isSubmitting || !form.startTime || !form.endTime ? "not-allowed" : "pointer",
                       background: !form.startTime || !form.endTime ? "var(--color-background-tertiary)" : "linear-gradient(135deg, #10B981, #059669)",
                       color: !form.startTime || !form.endTime ? "var(--color-text-secondary)" : "#ffffff",
-                      opacity: isSubmitting ? 0.6 : 1,
+                      opacity: isSubmittingRequest || isSubmitting ? 0.6 : 1,
                       transition: "background 0.15s, box-shadow 0.15s",
                       boxShadow: !form.startTime || !form.endTime ? "none" : "0 3px 16px rgba(16,185,129,0.4)",
                     }}
                   >
-                    {isSubmitting ? "Submitting…" : "Submit reservation request"}
+                    {isSubmittingRequest || isSubmitting ? "Submitting request..." : "Submit reservation request"}
                   </button>
                 )}
               </div>

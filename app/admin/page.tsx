@@ -39,6 +39,8 @@ type Booking = {
   chargedAmount?: number | null;
   paymentMethod?: string | null;
   paymentReference?: string | null;
+  sessionStartedAt?: string | null;
+  sessionEndedAt?: string | null;
   denialReason?: string | null;
   expiresAt?: string | null;
 };
@@ -72,6 +74,15 @@ type BlockedSessionRevenueRecord = {
   hourlyRateSnapshot?: number | null;
   actualDurationHours?: number | null;
   chargedAmount?: number | null;
+};
+
+type PaymentSettings = {
+  _id?: string;
+  provider: string;
+  accountName: string;
+  accountNumber: string;
+  instructions?: string | null;
+  qrImage?: string | null;
 };
 
 type AdminTablePageKey = "customers" | "bookings" | "users" | "courts" | "abuse" | "revenue" | "revenueBookings" | "blocked";
@@ -250,6 +261,30 @@ function statusClassName(status: string): string {
   }
 
   return `${styles.status} ${styles.statusInfo}`;
+}
+
+function sessionClassName(booking: Booking): string {
+  if (booking.sessionStartedAt && !booking.sessionEndedAt) {
+    return `${styles.status} ${styles.statusPending}`;
+  }
+
+  if (booking.sessionStartedAt && booking.sessionEndedAt) {
+    return `${styles.status} ${styles.statusInfo}`;
+  }
+
+  return `${styles.status} ${styles.statusCancelled}`;
+}
+
+function sessionLabel(booking: Booking): string {
+  if (booking.sessionStartedAt && !booking.sessionEndedAt) {
+    return "Running";
+  }
+
+  if (booking.sessionStartedAt && booking.sessionEndedAt) {
+    return "Ended";
+  }
+
+  return "Not started";
 }
 
 function localISODate(): string {
@@ -508,7 +543,7 @@ function parsePaymentReference(paymentReference?: string | null): Array<{ label:
 
 export default function AdminPage() {
   const [activeTab, setActiveTab] = useState<
-    "bookings" | "customers" | "courts" | "users" | "abuse" | "revenue" | "blocked"
+    "bookings" | "customers" | "courts" | "users" | "abuse" | "revenue" | "blocked" | "payment"
   >("bookings");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [currentUser, setCurrentUser] = useState<AdminUser | null>(null);
@@ -521,7 +556,31 @@ export default function AdminPage() {
   const [users, setUsers] = useState<StaffUser[]>([]);
   const [abuseLogs, setAbuseLogs] = useState<AbuseLog[]>([]);
   const [blockedSessions, setBlockedSessions] = useState<BlockedSessionRevenueRecord[]>([]);
+  const [paymentSettings, setPaymentSettings] = useState<PaymentSettings | null>(null);
+  const [paymentSettingsForm, setPaymentSettingsForm] = useState<PaymentSettings>({
+    provider: "GCash",
+    accountName: "",
+    accountNumber: "",
+    instructions: "",
+    qrImage: null,
+  });
+  const [isSavingPaymentSettings, setIsSavingPaymentSettings] = useState(false);
+  const [paymentSettingsMessage, setPaymentSettingsMessage] = useState<string | null>(null);
   const [revenueFilterMonth, setRevenueFilterMonth] = useState<string>(() => new Date().toISOString().slice(0, 7));
+
+  useEffect(() => {
+    if (!paymentSettingsMessage) {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      setPaymentSettingsMessage(null);
+    }, 2000);
+
+    return () => {
+      window.clearTimeout(timeout);
+    };
+  }, [paymentSettingsMessage]);
 
   const [loginForm, setLoginForm] = useState({ username: "", password: "" });
 
@@ -860,13 +919,14 @@ export default function AdminPage() {
     setLoading(true);
     setError(null);
     try {
-      const [bookingsData, customersData, courtsData, usersData, abuseData, blockedData] = await Promise.all([
+      const [bookingsData, customersData, courtsData, usersData, abuseData, blockedData, paymentSettingsData] = await Promise.all([
         api<Booking[]>("/api/admin/bookings"),
         api<Customer[]>("/api/admin/customers"),
         api<Court[]>("/api/admin/courts"),
         api<StaffUser[]>("/api/admin/users"),
         api<AbuseLog[]>("/api/admin/abuse-logs"),
         api<BlockedSessionRevenueRecord[]>('/api/admin/blocked-slots'),
+        api<PaymentSettings>('/api/admin/payment-settings'),
       ]);
 
       setBookings(bookingsData);
@@ -879,6 +939,8 @@ export default function AdminPage() {
       setUsers(usersData);
       setAbuseLogs(abuseData);
       setBlockedSessions(blockedData);
+      setPaymentSettings(paymentSettingsData);
+      setPaymentSettingsForm(paymentSettingsData);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load data");
     } finally {
@@ -1300,6 +1362,12 @@ export default function AdminPage() {
           <span className={styles.navBadge}>{completedBlockedSessions.length}</span>
         </button>
         <button
+          className={`${styles.navButton} ${activeTab === "payment" ? styles.navButtonActive : ""}`}
+          onClick={() => { setActiveTab("payment"); setSidebarOpen(false); }}
+        >
+          📱 Payment Destination
+        </button>
+        <button
           className={`${styles.navButton} ${activeTab === "blocked" ? styles.navButtonActive : ""}`}
           onClick={() => { setActiveTab("blocked"); setSidebarOpen(false); }}
         >
@@ -1592,6 +1660,7 @@ export default function AdminPage() {
                       <th>Customer</th>
                       <th>Slot</th>
                       <th>Status</th>
+                      <th>Session</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1608,9 +1677,17 @@ export default function AdminPage() {
                         </td>
                         <td>
                           {courtNameMap[booking.courtId] ?? booking.courtId} | {booking.bookingDate} {booking.startTime}-{booking.endTime}
+                          {booking.sessionStartedAt ? (
+                            <div className="mt-1 text-[11px] text-emerald-300">
+                              Started: {new Date(booking.sessionStartedAt).toLocaleString()}
+                            </div>
+                          ) : null}
                         </td>
                         <td>
                           <span className={statusClassName(booking.status)}>{booking.status}</span>
+                        </td>
+                        <td>
+                          <span className={sessionClassName(booking)}>{sessionLabel(booking)}</span>
                         </td>
 
                       </tr>
@@ -1623,6 +1700,152 @@ export default function AdminPage() {
                 totalPages={paginatedBookings.totalPages}
                 onPageChange={(page) => handleTablePageChange("bookings", page)}
               />
+              </div>
+            </section>
+          )}
+
+          {activeTab === "payment" && (
+            <section className={styles.panel}>
+              <div className={styles.panelHeader}>
+                <h2 className={styles.sectionTitle}>Payment Destination</h2>
+              </div>
+              <div className={styles.panelBody}>
+                <div className={styles.addFormSection}>
+                  <p className={styles.addFormTitle}>Official Online Payment Destination</p>
+                  <form
+                    className="grid gap-3"
+                    onSubmit={async (e) => {
+                      e.preventDefault();
+                      setIsSavingPaymentSettings(true);
+                      try {
+                        const saved = await api<PaymentSettings>("/api/admin/payment-settings", {
+                          method: "PUT",
+                          body: JSON.stringify(paymentSettingsForm),
+                        });
+                        setPaymentSettings(saved);
+                        setPaymentSettingsForm(saved);
+                        setPaymentSettingsMessage("Payment settings saved successfully.");
+                      } catch (err) {
+                        setPaymentSettingsMessage(null);
+                        setError(err instanceof Error ? err.message : "Failed to save payment settings");
+                      } finally {
+                        setIsSavingPaymentSettings(false);
+                      }
+                    }}
+                  >
+                    <div className="grid gap-2 md:grid-cols-3">
+                      <input
+                        className={styles.input}
+                        placeholder="Provider"
+                        value={paymentSettingsForm.provider}
+                        onChange={(e) => {
+                          setPaymentSettingsMessage(null);
+                          setPaymentSettingsForm((prev) => ({ ...prev, provider: e.target.value }));
+                        }}
+                      />
+                      <input
+                        className={styles.input}
+                        placeholder="Account name"
+                        value={paymentSettingsForm.accountName}
+                        onChange={(e) => {
+                          setPaymentSettingsMessage(null);
+                          setPaymentSettingsForm((prev) => ({ ...prev, accountName: e.target.value }));
+                        }}
+                      />
+                      <input
+                        className={styles.input}
+                        placeholder="Account number"
+                        value={paymentSettingsForm.accountNumber}
+                        onChange={(e) => {
+                          setPaymentSettingsMessage(null);
+                          setPaymentSettingsForm((prev) => ({ ...prev, accountNumber: e.target.value }));
+                        }}
+                      />
+                    </div>
+                    <textarea
+                      className={styles.input}
+                      placeholder="Instructions shown to customers and staff reviewers"
+                      rows={3}
+                      value={paymentSettingsForm.instructions ?? ""}
+                      onChange={(e) => {
+                        setPaymentSettingsMessage(null);
+                        setPaymentSettingsForm((prev) => ({ ...prev, instructions: e.target.value }));
+                      }}
+                    />
+                    <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-start">
+                      <label className="grid gap-2 text-xs text-gray-400">
+                        QR image
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className={styles.input}
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (!file) {
+                              return;
+                            }
+                            if (file.size > 3 * 1024 * 1024) {
+                              setError("QR image must be under 3 MB");
+                              return;
+                            }
+                            const reader = new FileReader();
+                            reader.onload = () => {
+                              setPaymentSettingsMessage(null);
+                              setPaymentSettingsForm((prev) => ({
+                                ...prev,
+                                qrImage: reader.result as string,
+                              }));
+                            };
+                            reader.readAsDataURL(file);
+                          }}
+                        />
+                      </label>
+                      {paymentSettingsForm.qrImage ? (
+                        <div className="grid gap-2">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={paymentSettingsForm.qrImage}
+                            alt="Payment QR"
+                            className="h-32 w-32 rounded-lg border border-gray-700 bg-[#0B0F1A] object-contain p-2"
+                          />
+                          <button
+                            type="button"
+                            className={`${styles.btn} ${styles.btnDark}`}
+                            onClick={() => {
+                              setPaymentSettingsMessage(null);
+                              setPaymentSettingsForm((prev) => ({ ...prev, qrImage: null }));
+                            }}
+                          >
+                            Remove QR
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
+                    {paymentSettings ? (
+                      <p className="text-xs text-gray-500">
+                        Staff can view this destination for payment review, but only admins can update it.
+                      </p>
+                    ) : null}
+                    {paymentSettingsMessage ? (
+                      <div className="flex items-start justify-between gap-3 rounded-lg border border-emerald-700/40 bg-emerald-900/20 px-3 py-2 text-sm text-emerald-300">
+                        <p className="m-0">{paymentSettingsMessage}</p>
+                        <button
+                          type="button"
+                          onClick={() => setPaymentSettingsMessage(null)}
+                          className="rounded border border-emerald-700/40 px-2 py-0.5 text-xs font-semibold leading-none text-emerald-200 transition hover:bg-emerald-800/40"
+                          aria-label="Dismiss success message"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ) : null}
+                    <div>
+                      <button className={`${styles.btn} ${styles.btnPrimary}`} type="submit" disabled={isSavingPaymentSettings}>
+                        {isSavingPaymentSettings ? "Saving..." : "Save Payment Settings"}
+                      </button>
+                    </div>
+                  </form>
+                </div>
               </div>
             </section>
           )}
@@ -2633,6 +2856,18 @@ export default function AdminPage() {
               <div>
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-[#6b9e84] mb-0.5">Status</p>
                 <span className={statusClassName(selectedBooking.status)}>{selectedBooking.status}</span>
+              </div>
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#6b9e84] mb-0.5">Session</p>
+                <span className={sessionClassName(selectedBooking)}>{sessionLabel(selectedBooking)}</span>
+              </div>
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#6b9e84] mb-0.5">Started At</p>
+                <p className="text-gray-200">{selectedBooking.sessionStartedAt ? new Date(selectedBooking.sessionStartedAt).toLocaleString() : "—"}</p>
+              </div>
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#6b9e84] mb-0.5">Ended At</p>
+                <p className="text-gray-200">{selectedBooking.sessionEndedAt ? new Date(selectedBooking.sessionEndedAt).toLocaleString() : "—"}</p>
               </div>
               <div className="col-span-2">
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-[#6b9e84] mb-0.5">Payment Reference</p>
