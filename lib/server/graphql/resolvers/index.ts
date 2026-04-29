@@ -9,7 +9,7 @@ import { CustomerModel } from "@/lib/server/graphql/models/Customer";
 import { CourtModel } from "@/lib/server/graphql/models/Court";
 import { AbuseLogModel } from "@/lib/server/graphql/models/AbuseLog";
 import { BlockedSlotModel } from "@/lib/server/graphql/models/BlockedSlot";
-import { findOverlappingBlockedSlot } from "@/lib/server/graphql/lib/blocked-slots";
+import { findOverlappingBlockedSlot, doesRecurringSlotApplyOnDate } from "@/lib/server/graphql/lib/blocked-slots";
 import { triggerBookingsUpdated } from "@/lib/server/pusher-server";
 import { EVENTS } from "@/lib/server/graphql/lib/events";
 import { pubSub } from "@/lib/server/graphql/lib/pubsub";
@@ -72,15 +72,36 @@ export const resolvers = {
     blockedSlots: async (_parent: unknown, args: { bookingDate?: string; courtId?: string }) => {
       const query: Record<string, unknown> = {};
 
-      if (args.bookingDate) {
-        query.bookingDate = args.bookingDate;
-      }
-
       if (args.courtId) {
         query.courtId = args.courtId;
       }
 
-      return BlockedSlotModel.find(query).sort({ bookingDate: 1, startTime: 1, createdAt: -1 });
+      if (args.bookingDate) {
+        query.$or = [
+          { bookingDate: args.bookingDate },
+          {
+            recurrenceUntilDate: { $ne: null },
+            bookingDate: { $lte: args.bookingDate },
+            recurrenceUntilDate: { $gte: args.bookingDate },
+            sessionEndedAt: null,
+          },
+        ];
+      }
+
+      const slots = await BlockedSlotModel.find(query).sort({ bookingDate: 1, startTime: 1, createdAt: -1 });
+
+      if (!args.bookingDate) {
+        return slots;
+      }
+
+      // For recurring slots returned via range, filter out those whose weekday
+      // pattern does not include the queried date's weekday.
+      return slots.filter((slot) => {
+        if (String(slot.bookingDate) === args.bookingDate) {
+          return true;
+        }
+        return doesRecurringSlotApplyOnDate(slot, args.bookingDate!);
+      });
     },
     courts: async () => {
       const courts = await CourtModel.find({ status: "active" });

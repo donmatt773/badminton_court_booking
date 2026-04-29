@@ -5,6 +5,21 @@ export function rangesOverlap(startA: string, endA: string, startB: string, endB
   return blockedSlotRangesOverlap(startA, endA, startB, endB);
 }
 
+function weekdayFromISODate(dateText: string): number {
+  return new Date(`${dateText}T00:00:00Z`).getUTCDay();
+}
+
+export function doesRecurringSlotApplyOnDate(
+  blockedSlot: { recurrenceWeekdays?: number[] | null },
+  bookingDate: string
+): boolean {
+  if (!Array.isArray(blockedSlot.recurrenceWeekdays) || blockedSlot.recurrenceWeekdays.length === 0) {
+    return true;
+  }
+
+  return blockedSlot.recurrenceWeekdays.includes(weekdayFromISODate(bookingDate));
+}
+
 export async function findOverlappingBlockedSlot(input: {
   courtId: string;
   bookingDate: string;
@@ -24,7 +39,13 @@ export async function findOverlappingBlockedSlot(input: {
     ],
   });
 
-  return blockedSlots.find((blockedSlot) =>
-    blockedSlotRangesOverlap(input.startTime, input.endTime, blockedSlot.startTime, blockedSlot.endTime)
-  ) ?? null;
+  return blockedSlots.find((blockedSlot) => {
+    const appliesOnDate = String(blockedSlot.bookingDate) === input.bookingDate
+      || doesRecurringSlotApplyOnDate(blockedSlot, input.bookingDate);
+    if (!appliesOnDate) {
+      return false;
+    }
+
+    return blockedSlotRangesOverlap(input.startTime, input.endTime, blockedSlot.startTime, blockedSlot.endTime);
+  }) ?? null;
 }

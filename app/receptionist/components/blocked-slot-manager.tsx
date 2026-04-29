@@ -20,6 +20,7 @@ type BlockedSlot = {
   groupName?: string | null;
   groupRepresentative?: string | null;
   recurrenceUntilDate?: string | null;
+  recurrenceWeekdays?: number[] | null;
   reason?: string | null;
   sessionStartedAt?: string | null;
   sessionEndedAt?: string | null;
@@ -62,6 +63,16 @@ function parseBlockedGroupKey(groupKey: string): { groupName: string; groupRepre
     groupRepresentative: groupRepresentative || "No Representative",
   };
 }
+
+const WEEKDAY_LABEL_BY_INDEX: Record<number, string> = {
+  0: "Sun",
+  1: "Mon",
+  2: "Tue",
+  3: "Wed",
+  4: "Thu",
+  5: "Fri",
+  6: "Sat",
+};
 
 function blockedSlotSessionLabel(slot: BlockedSlot, today: string): "scheduled" | "not_started" | "running" | "closed" {
   if (slot.sessionStartedAt && slot.sessionEndedAt) {
@@ -159,6 +170,7 @@ type NewBlockForm = {
   bookingDate: string;
   bookingMonth: string;
   bookingYear: string;
+  selectedWeekdays: number[];
   startTime: string;
   endTime: string;
   groupName: string;
@@ -195,6 +207,7 @@ export function BlockedSlotManager() {
     groupName: "",
     groupRepresentative: "",
     bookingDate: "",
+    recurrenceWeekdays: [] as number[],
     startTime: "",
     endTime: "",
     reason: "",
@@ -213,6 +226,7 @@ export function BlockedSlotManager() {
     bookingDate: todayISODate(),
     bookingMonth: currentMonthISO(),
     bookingYear: currentYearISO(),
+    selectedWeekdays: [],
     startTime: "08:00",
     endTime: "09:00",
     groupName: "",
@@ -230,9 +244,17 @@ export function BlockedSlotManager() {
       dates = listDatesInYear(form.bookingYear);
     }
 
+    if (form.mode !== "daily" && form.selectedWeekdays.length > 0) {
+      const selectedWeekdaySet = new Set(form.selectedWeekdays);
+      dates = dates.filter((dateText) => {
+        const weekday = new Date(`${dateText}T00:00:00Z`).getUTCDay();
+        return selectedWeekdaySet.has(weekday);
+      });
+    }
+
     const uniqueFutureDates = Array.from(new Set(dates)).filter((date) => date >= today).sort();
     return uniqueFutureDates;
-  }, [form.bookingDate, form.bookingMonth, form.bookingYear, form.mode, today]);
+  }, [form.bookingDate, form.bookingMonth, form.bookingYear, form.mode, form.selectedWeekdays, today]);
 
   const courtNameById = useMemo(() => {
     const map: Record<string, string> = {};
@@ -399,6 +421,18 @@ export function BlockedSlotManager() {
     () => Array.from(new Set(groupModalSlots.filter((slot) => !!slot.sessionStartedAt).map((slot) => slot.courtId))),
     [groupModalSlots]
   );
+
+  const groupModalRecurringDayLabels = useMemo(() => {
+    const firstWeekdays = groupModalSlots.find((slot) => Array.isArray(slot.recurrenceWeekdays))?.recurrenceWeekdays;
+    if (!Array.isArray(firstWeekdays) || firstWeekdays.length === 0) {
+      return ["Daily"];
+    }
+
+    return Array.from(new Set(firstWeekdays))
+      .filter((day) => Number.isInteger(day) && day >= 0 && day <= 6)
+      .sort((left, right) => left - right)
+      .map((day) => WEEKDAY_LABEL_BY_INDEX[day] ?? String(day));
+  }, [groupModalSlots]);
 
   async function loadData(): Promise<void> {
     setIsLoading(true);
@@ -569,6 +603,9 @@ export function BlockedSlotManager() {
         body: JSON.stringify({
           courtIds: form.courtIds,
           bookingDates,
+          recurrenceWeekdays: form.mode === "daily" || form.selectedWeekdays.length === 0
+            ? undefined
+            : form.selectedWeekdays,
           startTime: form.startTime,
           endTime: form.endTime,
           groupName: form.groupName.trim(),
@@ -935,6 +972,9 @@ export function BlockedSlotManager() {
     }
 
     const editableSlot = groupModalSlots.find((slot) => !slot.sessionStartedAt) ?? groupModalSlots[0];
+    const weekdaySourceSlot =
+      groupModalSlots.find((slot) => !slot.sessionStartedAt && Array.isArray(slot.recurrenceWeekdays))
+      ?? groupModalSlots.find((slot) => Array.isArray(slot.recurrenceWeekdays));
     const selectedCourtIds = Array.from(new Set(groupModalSlots.map((slot) => slot.courtId)));
     setGroupEditKey(groupModalKey);
     setGroupEditForm({
@@ -942,6 +982,9 @@ export function BlockedSlotManager() {
       groupName: editableSlot.groupName ?? "",
       groupRepresentative: editableSlot.groupRepresentative ?? "",
       bookingDate: editableSlot.bookingDate,
+      recurrenceWeekdays: Array.isArray(weekdaySourceSlot?.recurrenceWeekdays)
+        ? Array.from(new Set(weekdaySourceSlot.recurrenceWeekdays)).sort((a, b) => a - b)
+        : [],
       startTime: editableSlot.startTime,
       endTime: editableSlot.endTime,
       reason: editableSlot.reason ?? "",
@@ -992,10 +1035,9 @@ export function BlockedSlotManager() {
 
     const lockedCourtIds = new Set(targets.filter((slot) => !!slot.sessionStartedAt).map((slot) => slot.courtId));
     const selectedCourtIds = Array.from(new Set([...groupEditForm.courtIds, ...Array.from(lockedCourtIds)]));
-    const editableTargets = targets.filter((slot) => !slot.sessionStartedAt);
     const selectedCourtIdSet = new Set(selectedCourtIds);
 
-    for (const target of editableTargets) {
+    for (const target of targets) {
       try {
         if (!selectedCourtIdSet.has(target.courtId)) {
           const deleteResponse = await fetch(`/api/admin/blocked-slots/${target._id}`, {
@@ -1018,14 +1060,24 @@ export function BlockedSlotManager() {
         const response = await fetch(`/api/admin/blocked-slots/${target._id}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            groupName: groupEditForm.groupName.trim(),
-            groupRepresentative: groupEditForm.groupRepresentative.trim(),
-            bookingDate: groupEditForm.bookingDate,
-            startTime: groupEditForm.startTime,
-            endTime: groupEditForm.endTime,
-            reason: groupEditForm.reason.trim() || null,
-          }),
+          body: JSON.stringify(
+            target.sessionStartedAt
+              ? {
+                  groupName: groupEditForm.groupName.trim(),
+                  groupRepresentative: groupEditForm.groupRepresentative.trim(),
+                  recurrenceWeekdays: groupEditForm.recurrenceWeekdays.length > 0 ? groupEditForm.recurrenceWeekdays : null,
+                  reason: groupEditForm.reason.trim() || null,
+                }
+              : {
+                  groupName: groupEditForm.groupName.trim(),
+                  groupRepresentative: groupEditForm.groupRepresentative.trim(),
+                  bookingDate: groupEditForm.bookingDate,
+                  recurrenceWeekdays: groupEditForm.recurrenceWeekdays.length > 0 ? groupEditForm.recurrenceWeekdays : null,
+                  startTime: groupEditForm.startTime,
+                  endTime: groupEditForm.endTime,
+                  reason: groupEditForm.reason.trim() || null,
+                }
+          ),
         });
 
         if (!response.ok) {
@@ -1058,6 +1110,7 @@ export function BlockedSlotManager() {
           body: JSON.stringify({
             courtIds: [courtId],
             bookingDates: [groupEditForm.bookingDate],
+            recurrenceWeekdays: groupEditForm.recurrenceWeekdays.length > 0 ? groupEditForm.recurrenceWeekdays : undefined,
             startTime: groupEditForm.startTime,
             endTime: groupEditForm.endTime,
             groupName: groupEditForm.groupName.trim(),
@@ -1182,6 +1235,45 @@ export function BlockedSlotManager() {
                 />
               </div>
 
+              <div>
+                <label className="mb-1 block text-xs text-gray-400">Recurring Weekdays (optional)</label>
+                <p className="mb-1 text-[11px] text-gray-500">Select days like Tue/Thu for recurrence. Leave empty for daily recurrence.</p>
+                <div className="grid grid-cols-2 gap-1 sm:grid-cols-4">
+                  {[
+                    { value: 0, label: "Sun" },
+                    { value: 1, label: "Mon" },
+                    { value: 2, label: "Tue" },
+                    { value: 3, label: "Wed" },
+                    { value: 4, label: "Thu" },
+                    { value: 5, label: "Fri" },
+                    { value: 6, label: "Sat" },
+                  ].map((weekday) => {
+                    const checked = groupEditForm.recurrenceWeekdays.includes(weekday.value);
+                    return (
+                      <label
+                        key={`group-edit-weekday-${weekday.value}`}
+                        className="flex items-center gap-2 rounded border border-gray-700 px-2 py-1 text-xs text-gray-200"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(e) => {
+                            const isChecked = e.target.checked;
+                            setGroupEditForm((prev) => ({
+                              ...prev,
+                              recurrenceWeekdays: isChecked
+                                ? Array.from(new Set([...prev.recurrenceWeekdays, weekday.value])).sort((a, b) => a - b)
+                                : prev.recurrenceWeekdays.filter((day) => day !== weekday.value),
+                            }));
+                          }}
+                        />
+                        <span>{weekday.label}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="mb-1 block text-xs text-gray-400">Start Time</label>
@@ -1281,37 +1373,44 @@ export function BlockedSlotManager() {
                   {groupModalIdentity?.groupName} • {groupModalIdentity?.groupRepresentative}
                 </p>
               </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={handleOpenGroupEdit}
-                  disabled={isGroupDeleting}
-                  className="rounded border border-amber-600/50 bg-amber-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-amber-700"
-                >
-                  Edit Blocking Details
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleDeleteGroup()}
-                  disabled={isGroupDeleting}
-                  className="rounded border border-red-600/50 bg-red-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-60"
-                >
-                  {isGroupDeleting ? "Deleting..." : "Delete Permanently"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setGroupModalKey(null)}
-                  disabled={isGroupDeleting}
-                  className="rounded border border-gray-600 bg-[#111827] px-2.5 py-1 text-xs font-semibold text-gray-300 hover:border-gray-500"
-                >
-                  Close
-                </button>
+              <div className="flex flex-col items-end gap-2">
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleOpenGroupEdit}
+                    disabled={isGroupDeleting}
+                    className="rounded border border-amber-600/50 bg-amber-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-amber-700"
+                  >
+                    Edit Blocking Details
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleDeleteGroup()}
+                    disabled={isGroupDeleting}
+                    className="rounded border border-red-600/50 bg-red-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-60"
+                  >
+                    {isGroupDeleting ? "Deleting..." : "Delete Permanently"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setGroupModalKey(null)}
+                    disabled={isGroupDeleting}
+                    className="rounded border border-gray-600 bg-[#111827] px-2.5 py-1 text-xs font-semibold text-gray-300 hover:border-gray-500"
+                  >
+                    Close
+                  </button>
+                </div>
               </div>
             </div>
 
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
               <section className="rounded-lg border border-gray-700 bg-[#111827] p-3">
-                <h4 className="mb-2 text-sm font-semibold text-gray-100">Daily Summary</h4>
+                <div className="mb-2 flex items-start justify-between gap-2">
+                  <h4 className="text-sm font-semibold text-gray-100">Daily Summary</h4>
+                  <div className="rounded border border-cyan-700/40 bg-cyan-950/15 px-2 py-1 text-[11px] text-cyan-100">
+                    Recurring Days: <span className="font-semibold">{groupModalRecurringDayLabels.join(", ")}</span>
+                  </div>
+                </div>
                 <div className="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
                   <div className="rounded border border-cyan-700/40 bg-cyan-950/15 px-3 py-2">
                     <div className="text-[11px] uppercase tracking-wide text-cyan-200/80">Closed Sessions</div>
@@ -1461,6 +1560,46 @@ export function BlockedSlotManager() {
             Creating <span className="font-semibold">{bookingDates.length * form.courtIds.length}</span> record(s)
             ({bookingDates.length} date{bookingDates.length !== 1 ? "s" : ""} x {form.courtIds.length} court{form.courtIds.length !== 1 ? "s" : ""}).
             <span className="ml-1 text-cyan-200/90">This is recurring or multi-court, not a loop.</span>
+          </div>
+        ) : null}
+
+        {form.mode !== "daily" ? (
+          <div className="md:col-span-5 rounded border border-slate-300 bg-[#1F2937] p-2">
+            <span className="mb-2 block text-sm font-medium text-gray-200">Weekdays to block (optional)</span>
+            <p className="mb-2 text-xs text-gray-400">
+              Leave all unchecked to include every day in the selected month/year.
+            </p>
+            <div className="grid grid-cols-2 gap-1 sm:grid-cols-4 lg:grid-cols-7">
+              {[
+                { value: 0, label: "Sun" },
+                { value: 1, label: "Mon" },
+                { value: 2, label: "Tue" },
+                { value: 3, label: "Wed" },
+                { value: 4, label: "Thu" },
+                { value: 5, label: "Fri" },
+                { value: 6, label: "Sat" },
+              ].map((weekday) => {
+                const checked = form.selectedWeekdays.includes(weekday.value);
+                return (
+                  <label key={`weekday-${weekday.value}`} className="flex items-center gap-2 rounded border border-gray-700 px-2 py-1 text-xs text-gray-200">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={(e) => {
+                        const isChecked = e.target.checked;
+                        setForm((prev) => ({
+                          ...prev,
+                          selectedWeekdays: isChecked
+                            ? Array.from(new Set([...prev.selectedWeekdays, weekday.value])).sort((a, b) => a - b)
+                            : prev.selectedWeekdays.filter((day) => day !== weekday.value),
+                        }));
+                      }}
+                    />
+                    <span>{weekday.label}</span>
+                  </label>
+                );
+              })}
+            </div>
           </div>
         ) : null}
 

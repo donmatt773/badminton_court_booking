@@ -366,6 +366,7 @@ export default function BookingExperience() {
   const [reservationStep, setReservationStep] = useState<1 | 2>(1);
   const [isSubmittingRequest, setIsSubmittingRequest] = useState(false);
   const [courtsPage, setCourtsPage] = useState(1);
+  const [isMessageMenuOpen, setIsMessageMenuOpen] = useState(false);
   const COURTS_PER_PAGE = 6;
 
   const [form, setForm] = useState<BookingInput>({
@@ -449,6 +450,7 @@ export default function BookingExperience() {
   const refetchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isRefetchingFromRealtimeRef = useRef(false);
   const submitRequestLockRef = useRef(false);
+  const messageMenuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const pusher = getPusherClient();
@@ -522,6 +524,28 @@ export default function BookingExperience() {
       isMounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!isMessageMenuOpen) {
+      return;
+    }
+
+    const onClickOutside = (event: MouseEvent) => {
+      if (!messageMenuRef.current) {
+        return;
+      }
+
+      const target = event.target;
+      if (target instanceof Node && !messageMenuRef.current.contains(target)) {
+        setIsMessageMenuOpen(false);
+      }
+    };
+
+    window.addEventListener("mousedown", onClickOutside);
+    return () => {
+      window.removeEventListener("mousedown", onClickOutside);
+    };
+  }, [isMessageMenuOpen]);
 
   // Close modal on Escape
   useEffect(() => {
@@ -706,15 +730,82 @@ export default function BookingExperience() {
         </a>
         <div style={{ display: "flex", alignItems: "center", gap: 30, flexWrap: "wrap", fontSize: 13 }}>
           <a href="#home" className="hidden sm:inline" style={{ color: "rgba(255,255,255,0.85)", textDecoration: "none" }}>Home</a>
-          <a
-            href="https://m.me/coneconesportscenter"
-            target="_blank"
-            rel="noreferrer"
-            className="hidden sm:inline"
-            style={{ color: "rgba(255,255,255,0.85)", textDecoration: "none" }}
-          >
-            Message
-          </a>
+          <div ref={messageMenuRef} className="hidden sm:block" style={{ position: "relative" }}>
+            <button
+              type="button"
+              onClick={() => setIsMessageMenuOpen((prev) => !prev)}
+              style={{
+                color: "rgba(255,255,255,0.85)",
+                background: "transparent",
+                border: "none",
+                cursor: "pointer",
+                fontSize: 13,
+                padding: 0,
+              }}
+            >
+              Message
+            </button>
+
+            {isMessageMenuOpen && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: "calc(100% + 10px)",
+                  right: 0,
+                  minWidth: 190,
+                  borderRadius: "var(--border-radius-md)",
+                  border: "1px solid rgba(255,255,255,0.12)",
+                  background: "rgba(17,24,39,0.98)",
+                  boxShadow: "0 12px 28px rgba(0,0,0,0.45)",
+                  overflow: "hidden",
+                }}
+              >
+                <a
+                  href="viber://chat?number=%2B639171234567"
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    padding: "10px 12px",
+                    fontSize: 13,
+                    color: "rgba(255,255,255,0.9)",
+                    textDecoration: "none",
+                    borderBottom: "1px solid rgba(255,255,255,0.08)",
+                  }}
+                >
+                  <span aria-hidden="true" style={{ display: "inline-flex", width: 16, height: 16 }}>
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M12 3C6.48 3 2 6.99 2 11.9c0 2.84 1.5 5.38 3.85 7.02V22l3.17-1.74c.94.26 1.94.4 2.98.4 5.52 0 10-3.99 10-8.9S17.52 3 12 3Z" fill="#8B5CF6" />
+                      <path d="M9.12 8.89c.18-.18.43-.26.67-.19l1.16.33c.3.08.5.35.52.66l.04 1.06c.01.23-.07.45-.23.62l-.45.48c.44.82 1.1 1.53 1.93 2.02l.49-.45c.16-.15.38-.22.6-.2l1.1.09c.32.03.57.25.66.55l.29 1.03c.07.25 0 .52-.2.7l-.7.66c-.3.28-.72.4-1.12.31-3.06-.67-5.48-2.98-6.22-5.95-.1-.39.01-.8.3-1.09l.66-.64Z" fill="white" />
+                    </svg>
+                  </span>
+                  Viber
+                </a>
+                <a
+                  href="https://m.me/coneconesportscenter"
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    padding: "10px 12px",
+                    fontSize: 13,
+                    color: "rgba(255,255,255,0.9)",
+                    textDecoration: "none",
+                  }}
+                >
+                  <span aria-hidden="true" style={{ display: "inline-flex", width: 16, height: 16 }}>
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M12 2C6.48 2 2 6.15 2 11.27c0 2.91 1.45 5.51 3.73 7.21V22l3.15-1.74c.98.27 2.03.41 3.12.41 5.52 0 10-4.15 10-9.27S17.52 2 12 2Z" fill="#0EA5E9" />
+                      <path d="M8.13 13.73 11 10.63l2.03 1.69 2.83-3.01-3.07 1.67-1.98-1.69-2.68 4.44Z" fill="white" />
+                    </svg>
+                  </span>
+                  Messenger
+                </a>
+              </div>
+            )}
+          </div>
           <a href="#courts" className="hidden sm:inline" style={{ color: "rgba(255,255,255,0.85)", textDecoration: "none" }}>Courts</a>
           <Link
             href="/login"

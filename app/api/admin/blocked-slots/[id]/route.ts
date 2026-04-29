@@ -14,6 +14,7 @@ const patchSchema = z.object({
   groupName: z.string().trim().min(2).max(120).optional(),
   groupRepresentative: z.string().trim().min(2).max(120).optional(),
   reason: z.string().trim().max(200).nullable().optional(),
+  recurrenceWeekdays: z.array(z.number().int().min(0).max(6)).max(7).nullable().optional(),
   startTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
   endTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
   bookingDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
@@ -49,6 +50,30 @@ function addOneDay(dateText: string): string {
   const month = String(base.getMonth() + 1).padStart(2, "0");
   const day = String(base.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+function weekdayFromISODate(dateText: string): number {
+  return new Date(`${dateText}T00:00:00Z`).getUTCDay();
+}
+
+function getNextRecurringDate(input: {
+  currentDate: string;
+  recurrenceUntilDate: string;
+  recurrenceWeekdays?: number[] | null;
+}): string | null {
+  const weekdays = Array.isArray(input.recurrenceWeekdays) && input.recurrenceWeekdays.length > 0
+    ? Array.from(new Set(input.recurrenceWeekdays))
+    : null;
+
+  let cursor = addOneDay(input.currentDate);
+  while (cursor <= input.recurrenceUntilDate) {
+    if (!weekdays || weekdays.includes(weekdayFromISODate(cursor))) {
+      return cursor;
+    }
+    cursor = addOneDay(cursor);
+  }
+
+  return null;
 }
 
 export async function PUT(
@@ -125,40 +150,59 @@ export async function PUT(
     const recurrenceUntilDate = blockedSlot.recurrenceUntilDate
       ? String(blockedSlot.recurrenceUntilDate)
       : null;
+    const recurrenceWeekdays = Array.isArray(blockedSlot.recurrenceWeekdays)
+      ? Array.from(new Set(blockedSlot.recurrenceWeekdays.map((weekday) => Number(weekday)))).filter(
+          (weekday) => Number.isInteger(weekday) && weekday >= 0 && weekday <= 6
+        )
+      : null;
 
     if (recurrenceUntilDate && blockedSlot.bookingDate < recurrenceUntilDate) {
-      const nextBookingDate = addOneDay(String(blockedSlot.bookingDate));
-
-      const existingNextRecord = await BlockedSlotModel.findOne({
-        courtId: blockedSlot.courtId,
-        bookingDate: nextBookingDate,
-        startTime: blockedSlot.startTime,
-        endTime: blockedSlot.endTime,
-        groupName: blockedSlot.groupName ?? null,
-        groupRepresentative: blockedSlot.groupRepresentative ?? null,
-        sessionStartedAt: null,
-        sessionEndedAt: null,
+      const nextBookingDate = getNextRecurringDate({
+        currentDate: String(blockedSlot.bookingDate),
+        recurrenceUntilDate,
+        recurrenceWeekdays,
       });
 
-      if (!existingNextRecord) {
-        await BlockedSlotModel.create({
+      if (!nextBookingDate) {
+        await BlockedSlotModel.findByIdAndUpdate(id, {
+          $set: {
+            recurrenceUntilDate: null,
+          },
+        });
+      } else {
+
+        const existingNextRecord = await BlockedSlotModel.findOne({
           courtId: blockedSlot.courtId,
           bookingDate: nextBookingDate,
-          recurrenceUntilDate,
           startTime: blockedSlot.startTime,
           endTime: blockedSlot.endTime,
           groupName: blockedSlot.groupName ?? null,
           groupRepresentative: blockedSlot.groupRepresentative ?? null,
-          reason: blockedSlot.reason ?? null,
-          createdByUserId: blockedSlot.createdByUserId ?? null,
+          sessionStartedAt: null,
+          sessionEndedAt: null,
+        });
+
+        if (!existingNextRecord) {
+          await BlockedSlotModel.create({
+            courtId: blockedSlot.courtId,
+            bookingDate: nextBookingDate,
+            recurrenceUntilDate,
+            recurrenceWeekdays,
+            startTime: blockedSlot.startTime,
+            endTime: blockedSlot.endTime,
+            groupName: blockedSlot.groupName ?? null,
+            groupRepresentative: blockedSlot.groupRepresentative ?? null,
+            reason: blockedSlot.reason ?? null,
+            createdByUserId: blockedSlot.createdByUserId ?? null,
+          });
+        }
+
+        await BlockedSlotModel.findByIdAndUpdate(id, {
+          $set: {
+            recurrenceUntilDate: null,
+          },
         });
       }
-
-      await BlockedSlotModel.findByIdAndUpdate(id, {
-        $set: {
-          recurrenceUntilDate: null,
-        },
-      });
     }
 
     const updatedEndRecord = await BlockedSlotModel.findByIdAndUpdate(
@@ -218,6 +262,11 @@ export async function PATCH(
     if (body.groupName !== undefined) updateFields.groupName = body.groupName;
     if (body.groupRepresentative !== undefined) updateFields.groupRepresentative = body.groupRepresentative;
     if (body.reason !== undefined) updateFields.reason = body.reason ?? null;
+    if (body.recurrenceWeekdays !== undefined) {
+      updateFields.recurrenceWeekdays = body.recurrenceWeekdays && body.recurrenceWeekdays.length > 0
+        ? Array.from(new Set(body.recurrenceWeekdays)).sort((left, right) => left - right)
+        : null;
+    }
 
     if (body.startTime !== undefined || body.endTime !== undefined || body.bookingDate !== undefined) {
       if (isSessionActive) {

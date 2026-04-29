@@ -1845,8 +1845,8 @@ export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef,
   const [archiving, setArchiving] = useState(false);
   const [sortKey, setSortKey] = useState<"customer" | "contact" | "court" | "date" | "time" | "status">("date");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
-  const [archivedPage, setArchivedPage] = useState(1);
-  const ARCHIVED_PAGE_SIZE = 10;
+  const [tablePage, setTablePage] = useState(1);
+  const TABLE_PAGE_SIZE = 10;
   const [selectedPaymentBooking, setSelectedPaymentBooking] = useState<Booking | null>(null);
   const [focusedBookingId, setFocusedBookingId] = useState<string | null>(null);
   const courtCatalog             = useCourtCatalog();
@@ -1886,7 +1886,7 @@ export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef,
   function handleTabChange(tab: StatusTab) {
     setActiveTab(tab);
     setSelectedIds(new Set());
-    setArchivedPage(1);
+    setTablePage(1);
     onTabChange?.(tab);
     onSelectionChange?.(0);
   }
@@ -1898,7 +1898,7 @@ export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef,
 
     setActiveTab(externalActiveTab);
     setSelectedIds(new Set());
-    setArchivedPage(1);
+    setTablePage(1);
     onSelectionChange?.(0);
   }, [activeTab, externalActiveTab, onSelectionChange]);
 
@@ -1917,7 +1917,7 @@ export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef,
   }, [focusedBookingId]);
 
   useEffect(() => {
-    setArchivedPage(1);
+    setTablePage(1);
   }, [searchCustomer]);
 
   async function archiveSelected(): Promise<void> {
@@ -1984,7 +1984,7 @@ export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef,
     if (activeTab !== "pending") {
       setActiveTab("pending");
       setSelectedIds(new Set());
-      setArchivedPage(1);
+      setTablePage(1);
       onSelectionChange?.(0);
       return;
     }
@@ -2180,10 +2180,15 @@ export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef,
       : visibleBookings.filter((b) => archivableStatuses.includes(b.status) && !b.isArchived);
   const allSelectableSelected = selectableVisible.length > 0 && selectableVisible.every((b) => selectedIds.has(b._id));
 
-  const archivedTotalPages = activeTab === "archived" ? Math.max(1, Math.ceil(visibleBookings.length / ARCHIVED_PAGE_SIZE)) : 1;
-  const pagedBookings = activeTab === "archived"
-    ? visibleBookings.slice((archivedPage - 1) * ARCHIVED_PAGE_SIZE, archivedPage * ARCHIVED_PAGE_SIZE)
-    : visibleBookings;
+  const totalPages = Math.max(1, Math.ceil(visibleBookings.length / TABLE_PAGE_SIZE));
+  const safePage = Math.min(tablePage, totalPages);
+  const pagedBookings = visibleBookings.slice((safePage - 1) * TABLE_PAGE_SIZE, safePage * TABLE_PAGE_SIZE);
+
+  useEffect(() => {
+    if (tablePage !== safePage) {
+      setTablePage(safePage);
+    }
+  }, [safePage, tablePage]);
 
   return (
     <div className="w-full max-w-7xl mx-auto">
@@ -2454,30 +2459,30 @@ export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef,
         </table>
       </div>
 
-      {activeTab === "archived" && archivedTotalPages > 1 && (
+      {totalPages > 1 && (
         <div className="mt-3 flex items-center justify-between gap-2 flex-wrap">
           <span className="text-xs text-gray-400">
-            Page {archivedPage} of {archivedTotalPages} &mdash; {visibleBookings.length} records
+            Page {safePage} of {totalPages} &mdash; {visibleBookings.length} records
           </span>
           <div className="flex items-center gap-1">
             <button
               type="button"
-              disabled={archivedPage <= 1}
-              onClick={() => setArchivedPage(1)}
+              disabled={safePage <= 1}
+              onClick={() => setTablePage(1)}
               className="px-2 py-1 text-xs rounded bg-[#1F2937] border border-gray-700 text-gray-300 hover:bg-gray-700 disabled:opacity-40"
             >
               «
             </button>
             <button
               type="button"
-              disabled={archivedPage <= 1}
-              onClick={() => setArchivedPage((p) => p - 1)}
+              disabled={safePage <= 1}
+              onClick={() => setTablePage((p) => p - 1)}
               className="px-2.5 py-1 text-xs rounded bg-[#1F2937] border border-gray-700 text-gray-300 hover:bg-gray-700 disabled:opacity-40"
             >
               ‹ Prev
             </button>
-            {Array.from({ length: archivedTotalPages }, (_, i) => i + 1)
-              .filter((p) => p === 1 || p === archivedTotalPages || Math.abs(p - archivedPage) <= 2)
+            {Array.from({ length: totalPages }, (_, i) => i + 1)
+              .filter((p) => p === 1 || p === totalPages || Math.abs(p - safePage) <= 2)
               .reduce<(number | "...")[]>((acc, p, idx, arr) => {
                 if (idx > 0 && (p as number) - (arr[idx - 1] as number) > 1) acc.push("...");
                 acc.push(p);
@@ -2490,9 +2495,9 @@ export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef,
                   <button
                     key={item}
                     type="button"
-                    onClick={() => setArchivedPage(item as number)}
+                    onClick={() => setTablePage(item as number)}
                     className={`px-2.5 py-1 text-xs rounded border ${
-                      archivedPage === item
+                      safePage === item
                         ? "bg-emerald-600 border-emerald-500 text-white font-semibold"
                         : "bg-[#1F2937] border-gray-700 text-gray-300 hover:bg-gray-700"
                     }`}
@@ -2503,16 +2508,16 @@ export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef,
               )}
             <button
               type="button"
-              disabled={archivedPage >= archivedTotalPages}
-              onClick={() => setArchivedPage((p) => p + 1)}
+              disabled={safePage >= totalPages}
+              onClick={() => setTablePage((p) => p + 1)}
               className="px-2.5 py-1 text-xs rounded bg-[#1F2937] border border-gray-700 text-gray-300 hover:bg-gray-700 disabled:opacity-40"
             >
               Next ›
             </button>
             <button
               type="button"
-              disabled={archivedPage >= archivedTotalPages}
-              onClick={() => setArchivedPage(archivedTotalPages)}
+              disabled={safePage >= totalPages}
+              onClick={() => setTablePage(totalPages)}
               className="px-2 py-1 text-xs rounded bg-[#1F2937] border border-gray-700 text-gray-300 hover:bg-gray-700 disabled:opacity-40"
             >
               »

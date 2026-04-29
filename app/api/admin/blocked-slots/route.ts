@@ -17,6 +17,7 @@ const createSchema = z
     courtIds: z.array(z.string().min(1)).max(100).optional(),
     bookingDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     bookingDates: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).max(366).optional(),
+    recurrenceWeekdays: z.array(z.number().int().min(0).max(6)).max(7).optional(),
     startTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
     endTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
     groupName: z.string().trim().min(2).max(120),
@@ -97,6 +98,9 @@ export async function POST(request: Request): Promise<Response> {
     const bookingDates = Array.from(
       new Set([...(body.bookingDates ?? []), ...(body.bookingDate ? [body.bookingDate] : [])])
     ).sort();
+    const recurrenceWeekdays = body.recurrenceWeekdays && body.recurrenceWeekdays.length > 0
+      ? Array.from(new Set(body.recurrenceWeekdays)).sort((left, right) => left - right)
+      : null;
 
     const courts = await CourtModel.find({ _id: { $in: courtIds } }).select("_id");
     const foundCourtIds = new Set(courts.map((court) => String(court._id)));
@@ -136,6 +140,7 @@ export async function POST(request: Request): Promise<Response> {
         courtId,
         bookingDate: firstBookingDate,
         recurrenceUntilDate: lastBookingDate > firstBookingDate ? lastBookingDate : null,
+        recurrenceWeekdays,
         startTime: body.startTime,
         endTime: body.endTime,
         groupName: body.groupName.trim(),
