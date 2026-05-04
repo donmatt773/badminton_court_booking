@@ -16,10 +16,11 @@ const createSchema = z
     courtId: z.string().min(1).optional(),
     courtIds: z.array(z.string().min(1)).max(100).optional(),
     bookingDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-    bookingDates: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).max(366).optional(),
-    recurrenceWeekdays: z.array(z.number().int().min(0).max(6)).max(7).optional(),
+    bookingDates: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).max(1).optional(),
     startTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
     endTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+    recurrenceUntilDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable(),
+    recurrenceWeekdays: z.array(z.number().int().min(0).max(6)).max(7).optional().nullable(),
     groupName: z.string().trim().min(2).max(120),
     groupRepresentative: z.string().trim().min(2).max(120),
     reason: z.string().trim().max(200).optional(),
@@ -46,6 +47,14 @@ const createSchema = z
       });
     }
 
+    if (Array.isArray(value.bookingDates) && value.bookingDates.length > 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Daily blocking supports only one date",
+        path: ["bookingDates"],
+      });
+    }
+
     if (!isValidBlockedSlotTimeRange(value.startTime, value.endTime)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -53,18 +62,43 @@ const createSchema = z
         path: ["endTime"],
       });
     }
+
+    const bookingDate = value.bookingDate ?? value.bookingDates?.[0];
+    const recurrenceUntilDate = value.recurrenceUntilDate ?? null;
+    const recurrenceWeekdays = Array.isArray(value.recurrenceWeekdays)
+      ? Array.from(new Set(value.recurrenceWeekdays))
+      : [];
+
+    if (recurrenceWeekdays.length > 0 && !recurrenceUntilDate) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "recurrenceUntilDate is required when recurrenceWeekdays is set",
+        path: ["recurrenceUntilDate"],
+      });
+    }
+
+    if (bookingDate && recurrenceUntilDate && recurrenceUntilDate < bookingDate) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "recurrenceUntilDate cannot be earlier than bookingDate",
+        path: ["recurrenceUntilDate"],
+      });
+    }
   });
 
 export async function GET(request: Request): Promise<Response> {
   try {
     await ensureGraphQLRuntimeStarted();
-    await requireAdminSession();
+    const session = await requireAdminSession();
 
     const params = new URL(request.url).searchParams;
     const bookingDate = params.get("bookingDate") ?? undefined;
     const courtId = params.get("courtId") ?? undefined;
+    const includeArchived = params.get("includeArchived") === "1";
 
-    const query: Record<string, string> = {};
+    const query: Record<string, unknown> = {
+      isArchived: includeArchived && session.role === "ADMIN" ? { $in: [true, false] } : { $ne: true },
+    };
     if (bookingDate) {
       query.bookingDate = bookingDate;
     }
@@ -95,12 +129,11 @@ export async function POST(request: Request): Promise<Response> {
     const courtIds = Array.from(
       new Set([...(body.courtIds ?? []), ...(body.courtId ? [body.courtId] : [])])
     );
-    const bookingDates = Array.from(
-      new Set([...(body.bookingDates ?? []), ...(body.bookingDate ? [body.bookingDate] : [])])
-    ).sort();
-    const recurrenceWeekdays = body.recurrenceWeekdays && body.recurrenceWeekdays.length > 0
-      ? Array.from(new Set(body.recurrenceWeekdays)).sort((left, right) => left - right)
-      : null;
+    const bookingDate = body.bookingDate ?? body.bookingDates?.[0];
+
+    if (!bookingDate) {
+      return Response.json({ error: { message: "bookingDate is required" } }, { status: 400 });
+    }
 
     const courts = await CourtModel.find({ _id: { $in: courtIds } }).select("_id");
     const foundCourtIds = new Set(courts.map((court) => String(court._id)));
@@ -113,16 +146,13 @@ export async function POST(request: Request): Promise<Response> {
       );
     }
 
-    const firstBookingDate = bookingDates[0];
-    const lastBookingDate = bookingDates[bookingDates.length - 1];
-
     const created: unknown[] = [];
     const skipped: Array<{ courtId: string; bookingDate: string; reason: string }> = [];
 
     for (const courtId of courtIds) {
       const overlap = await findOverlappingBlockedSlot({
         courtId,
-        bookingDate: firstBookingDate,
+        bookingDate,
         startTime: body.startTime,
         endTime: body.endTime,
       });
@@ -130,7 +160,7 @@ export async function POST(request: Request): Promise<Response> {
       if (overlap) {
         skipped.push({
           courtId,
-          bookingDate: firstBookingDate,
+          bookingDate,
           reason: "Overlaps an existing blocked range",
         });
         continue;
@@ -138,9 +168,11 @@ export async function POST(request: Request): Promise<Response> {
 
       const blockedSlot = await BlockedSlotModel.create({
         courtId,
-        bookingDate: firstBookingDate,
-        recurrenceUntilDate: lastBookingDate > firstBookingDate ? lastBookingDate : null,
-        recurrenceWeekdays,
+        bookingDate,
+        recurrenceUntilDate: body.recurrenceUntilDate?.trim() || null,
+        recurrenceWeekdays: Array.isArray(body.recurrenceWeekdays) && body.recurrenceWeekdays.length > 0
+          ? Array.from(new Set(body.recurrenceWeekdays))
+          : null,
         startTime: body.startTime,
         endTime: body.endTime,
         groupName: body.groupName.trim(),

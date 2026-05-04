@@ -14,6 +14,21 @@ function parseTimeToMinutes(time: string): number {
   return hours * 60 + minutes;
 }
 
+export function isWeekendISODate(bookingDate: string): boolean {
+  const day = new Date(`${bookingDate}T00:00:00`).getDay();
+  return day === 0 || day === 6;
+}
+
+export function resolveCourtHourlyRateForDate(
+  court: { price?: number | null; weekdayRate?: number | null; weekendRate?: number | null },
+  bookingDate: string
+): number {
+  const fallbackRate = Number.isFinite(court.price) ? Number(court.price) : 0;
+  const weekdayRate = Number.isFinite(court.weekdayRate) ? Number(court.weekdayRate) : fallbackRate;
+  const weekendRate = Number.isFinite(court.weekendRate) ? Number(court.weekendRate) : fallbackRate;
+  return isWeekendISODate(bookingDate) ? weekendRate : weekdayRate;
+}
+
 export function computeBookingPricing(hourlyRate: number, startTime: string, endTime: string): {
   appliedHourlyRate: number;
   durationHours: number;

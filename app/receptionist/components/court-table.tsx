@@ -31,7 +31,12 @@ const CourtTable: FC = () => {
         if (!res.ok) throw new Error("Failed to fetch courts");
         return res.json();
       })
-      .then((data) => setCourts(data.data || []))
+      .then((data) => {
+        const safeCourts = Array.isArray(data?.data)
+          ? data.data.filter((court: Court | null) => court && typeof court._id === "string")
+          : [];
+        setCourts(safeCourts);
+      })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
   }, []);

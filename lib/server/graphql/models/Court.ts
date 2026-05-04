@@ -27,6 +27,16 @@ const courtSchema = new Schema(
       min: 0,
       default: 0,
     },
+    weekdayRate: {
+      type: Number,
+      min: 0,
+      default: null,
+    },
+    weekendRate: {
+      type: Number,
+      min: 0,
+      default: null,
+    },
   },
   {
     timestamps: true,
@@ -43,6 +53,14 @@ if (
     !existingCourtModel.schema.path("price"))
 ) {
   delete models.Court;
+}
+
+if (existingCourtModel && !existingCourtModel.schema.path("weekdayRate")) {
+  existingCourtModel.schema.add({ weekdayRate: { type: Number, min: 0, default: null } });
+}
+
+if (existingCourtModel && !existingCourtModel.schema.path("weekendRate")) {
+  existingCourtModel.schema.add({ weekendRate: { type: Number, min: 0, default: null } });
 }
 
 export const CourtModel = models.Court ?? model("Court", courtSchema);

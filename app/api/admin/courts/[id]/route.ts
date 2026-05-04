@@ -10,6 +10,8 @@ const updateSchema = z.object({
   surfaceType: z.enum(["wooden", "rubber"]).optional(),
   status: z.enum(["active", "inactive", "maintenance"]).optional(),
   price: z.coerce.number().min(0).optional(),
+  weekdayRate: z.coerce.number().min(0).optional(),
+  weekendRate: z.coerce.number().min(0).optional(),
 });
 
 export async function GET(
@@ -54,7 +56,21 @@ export async function PUT(
     const { id } = await context.params;
     const body = updateSchema.parse(await request.json());
 
-    const court = await CourtModel.findByIdAndUpdate(id, body, { new: true });
+    const payload: Record<string, unknown> = { ...body };
+
+    if (body.weekdayRate !== undefined && payload.price === undefined) {
+      payload.price = body.weekdayRate;
+    }
+
+    if (body.price !== undefined && body.weekdayRate === undefined) {
+      payload.weekdayRate = body.price;
+    }
+
+    if (body.price !== undefined && body.weekendRate === undefined) {
+      payload.weekendRate = body.price;
+    }
+
+    const court = await CourtModel.findByIdAndUpdate(id, payload, { new: true });
 
     if (!court) {
       return Response.json({ error: { message: "Court not found" } }, { status: 404 });

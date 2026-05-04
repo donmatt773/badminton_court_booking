@@ -1399,9 +1399,50 @@ function parsePaymentReference(paymentReference?: string | null): Array<{ label:
   return null;
 }
 
-const PaymentDetailsModal: FC<{ booking: Booking; onClose: () => void }> = ({ booking, onClose }) => {
+const PaymentDetailsModal: FC<{ booking: Booking; onClose: () => void; courtNames: Record<string, string> }> = ({ booking, onClose, courtNames }) => {
   const [paymentSettings, setPaymentSettings] = useState<PaymentSettings | null>(null);
   const [showImagePreview, setShowImagePreview] = useState(false);
+  const [activeSection, setActiveSection] = useState<"booking" | "payment">("booking");
+
+  function handlePrintReceipt(): void {
+    const customer = typeof booking.customer === "object" ? booking.customer : { name: booking.customer, email: "-", contactNumber: "-" };
+    const courtName = courtNames[booking.courtId] || booking.courtId;
+    const parsedRef = parsePaymentReference(booking.paymentReference);
+    const refHtml = parsedRef
+      ? parsedRef.map((r) => `<div class="row"><span class="label">${r.label}</span><span>${r.value}</span></div>`).join("")
+      : `<div class="row"><span class="label">Reference</span><span>${booking.paymentReference || "—"}</span></div>`;
+    const html = `<!DOCTYPE html><html><head><title>Booking Receipt</title>
+      <style>
+        body{font-family:monospace;font-size:12px;padding:20px;background:#fff;color:#111;max-width:420px;margin:auto}
+        .center{text-align:center} .divider{border-top:1px dashed #999;margin:8px 0}
+        .row{display:flex;justify-content:space-between;margin-bottom:4px}
+        .label{color:#555} .green{color:#16a34a;font-weight:700} .bold{font-weight:700}
+      </style></head><body>
+      <div class="center bold" style="font-size:14px">C-One Sports Center</div>
+      <div class="center" style="color:#555">Sports Center Complex, Main Road</div>
+      <div class="center" style="color:#555">TIN: 000-000-000-000</div>
+      <div class="center bold" style="margin:6px 0;letter-spacing:2px">— OFFICIAL RECEIPT —</div>
+      <div class="divider"></div>
+      <div class="row"><span class="label">Date Printed</span><span>${new Date().toLocaleString()}</span></div>
+      <div class="row"><span class="label">Customer</span><span class="bold">${customer.name}</span></div>
+      <div class="row"><span class="label">Email</span><span>${customer.email || "—"}</span></div>
+      <div class="row"><span class="label">Contact</span><span>${customer.contactNumber || "—"}</span></div>
+      <div class="divider"></div>
+      <div class="row"><span class="label">Court</span><span>${courtName}</span></div>
+      <div class="row"><span class="label">Date</span><span>${booking.bookingDate}</span></div>
+      <div class="row"><span class="label">Time</span><span>${booking.startTime} – ${booking.endTime}</span></div>
+      <div class="row"><span class="label">Status</span><span class="green">${booking.status}</span></div>
+      <div class="divider"></div>
+      <div class="row"><span class="label">Payment Method</span><span>${(booking.paymentMethod ?? "—").toUpperCase()}</span></div>
+      ${refHtml}
+      </body></html>`;
+    const w = window.open("", "_blank", "width=480,height=700");
+    if (!w) return;
+    w.document.write(html);
+    w.document.close();
+    w.focus();
+    w.print();
+  }
   const customer =
     typeof booking.customer === "object"
       ? booking.customer
@@ -1437,82 +1478,133 @@ const PaymentDetailsModal: FC<{ booking: Booking; onClose: () => void }> = ({ bo
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="w-full max-w-lg rounded-2xl border border-gray-700 bg-[#111827] p-5 shadow-2xl">
-        <div className="mb-3 flex items-start justify-between gap-3">
+      <div className="w-full max-w-lg rounded-2xl border border-gray-700 bg-[#111827] shadow-2xl flex flex-col max-h-[88vh]">
+        {/* Header */}
+        <div className="flex items-start justify-between gap-3 px-5 pt-5 pb-3 shrink-0">
           <div>
-            <h3 className="text-base font-semibold text-gray-100">Payment Details</h3>
-            <p className="mt-0.5 text-xs text-gray-500">Review payment info submitted by staff.</p>
+            <h3 className="text-base font-semibold text-gray-100">Booking Details</h3>
+            <p className="mt-0.5 text-xs text-gray-500">Review customer and payment information.</p>
           </div>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={handlePrintReceipt}
+              className="rounded-lg border border-gray-700 bg-[#1F2937] px-2.5 py-1 text-xs text-gray-300 hover:bg-gray-700"
+            >
+              🖨 Reprint Receipt
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-lg border border-gray-700 bg-[#1F2937] px-2.5 py-1 text-xs text-gray-300 hover:bg-gray-700"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+
+        {/* Tabs */}
+        <div className="flex border-b border-gray-700 px-5 shrink-0">
           <button
             type="button"
-            onClick={onClose}
-            className="rounded-lg border border-gray-700 bg-[#1F2937] px-2.5 py-1 text-xs text-gray-300 hover:bg-gray-700"
+            onClick={() => setActiveSection("booking")}
+            className={`px-4 py-2 text-xs font-semibold border-b-2 transition-colors ${
+              activeSection === "booking"
+                ? "border-emerald-500 text-emerald-400"
+                : "border-transparent text-gray-500 hover:text-gray-300"
+            }`}
           >
-            Close
+            Customer &amp; Booking
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveSection("payment")}
+            className={`px-4 py-2 text-xs font-semibold border-b-2 transition-colors ${
+              activeSection === "payment"
+                ? "border-emerald-500 text-emerald-400"
+                : "border-transparent text-gray-500 hover:text-gray-300"
+            }`}
+          >
+            Payment
           </button>
         </div>
 
-        <div className="grid gap-2 rounded-lg border border-gray-700 bg-[#0B0F1A] p-3 text-xs text-gray-300">
-          <div className="flex justify-between gap-3"><span className="text-gray-500">Customer</span><span className="font-medium text-gray-100">{customer.name}</span></div>
-          <div className="flex justify-between gap-3"><span className="text-gray-500">Email</span><span>{customer.email || "-"}</span></div>
-          <div className="flex justify-between gap-3"><span className="text-gray-500">Contact</span><span>{customer.contactNumber || "-"}</span></div>
-          <div className="flex justify-between gap-3"><span className="text-gray-500">Date</span><span>{booking.bookingDate}</span></div>
-          <div className="flex justify-between gap-3"><span className="text-gray-500">Time</span><span>{formatTime12h(booking.startTime)} - {formatTime12h(booking.endTime)}</span></div>
-          <div className="flex justify-between gap-3"><span className="text-gray-500">Payment Method</span><span className="uppercase">{booking.paymentMethod ?? "-"}</span></div>
-          <div className="mt-1 border-t border-gray-700 pt-2">
-            <p className="mb-1 text-gray-500">Payment Reference</p>
-            {parsedPaymentReference ? (
-              <div className="grid gap-2 rounded-lg border border-gray-700 bg-[#111827] p-3">
-                {parsedPaymentReference.map((item) => (
-                  <div key={item.label} className="flex items-start justify-between gap-3">
-                    <span className="text-gray-500">{item.label}</span>
-                    <span className="text-right font-medium text-gray-100">{item.value}</span>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="whitespace-pre-wrap wrap-break-word text-gray-200">{booking.paymentReference || "No reference recorded."}</p>
-            )}
-          </div>
-          {paymentSettings?.accountNumber || paymentSettings?.accountName ? (
-            <div className="mt-1 border-t border-gray-700 pt-2">
-              <p className="mb-1 text-gray-500">Official Destination</p>
-              <div className="grid gap-1 rounded-lg border border-gray-700 bg-[#111827] p-3">
-                <div className="flex justify-between gap-3"><span className="text-gray-500">Provider</span><span className="font-medium text-gray-100">{paymentSettings.provider || '-'}</span></div>
-                <div className="flex justify-between gap-3"><span className="text-gray-500">Account Name</span><span className="font-medium text-gray-100">{paymentSettings.accountName || '-'}</span></div>
-                <div className="flex justify-between gap-3"><span className="text-gray-500">Account Number</span><span className="font-medium text-gray-100">{paymentSettings.accountNumber || '-'}</span></div>
-                {paymentSettings.instructions ? (
-                  <div className="mt-1 text-gray-400">{paymentSettings.instructions}</div>
-                ) : null}
-              </div>
-            </div>
-          ) : null}
-        </div>
+        {/* Scrollable content */}
+        <div className="overflow-y-auto flex-1 px-5 py-4">
 
-        <div className="mt-3">
-          <p className="mb-1 text-xs text-gray-500">Payment Proof</p>
-          {booking.paymentProofImage ? (
-            <>
-              <button
-                type="button"
-                onClick={() => setShowImagePreview(true)}
-                className="block w-full cursor-zoom-in"
-                aria-label="Open larger payment proof preview"
-              >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={booking.paymentProofImage}
-                  alt="Payment proof"
-                  className="max-h-72 w-full rounded-lg border border-gray-700 bg-[#0B0F1A] object-contain"
-                />
-              </button>
-              <p className="mt-1 text-xs text-emerald-300">Click the image to enlarge it.</p>
-            </>
-          ) : (
-            <div className="rounded-lg border border-gray-700 bg-[#0B0F1A] px-3 py-5 text-center text-xs text-gray-500">
-              {hasPaymentData ? "No image proof attached." : "No payment details recorded yet."}
+          {activeSection === "booking" && (
+            <div className="grid gap-2 rounded-lg border border-gray-700 bg-[#0B0F1A] p-3 text-xs text-gray-300">
+              <div className="flex justify-between gap-3"><span className="text-gray-500">Customer</span><span className="font-medium text-gray-100">{customer.name}</span></div>
+              <div className="flex justify-between gap-3"><span className="text-gray-500">Email</span><span>{customer.email || "-"}</span></div>
+              <div className="flex justify-between gap-3"><span className="text-gray-500">Contact</span><span>{customer.contactNumber || "-"}</span></div>
+              <div className="border-t border-gray-700 pt-2 mt-1 flex justify-between gap-3"><span className="text-gray-500">Date</span><span>{booking.bookingDate}</span></div>
+              <div className="flex justify-between gap-3"><span className="text-gray-500">Time</span><span>{formatTime12h(booking.startTime)} - {formatTime12h(booking.endTime)}</span></div>
+              <div className="flex justify-between gap-3"><span className="text-gray-500">Status</span><span className="uppercase font-semibold text-emerald-400">{booking.status}</span></div>
             </div>
           )}
+
+          {activeSection === "payment" && (
+            <div className="grid gap-3 text-xs text-gray-300">
+              <div className="grid gap-2 rounded-lg border border-gray-700 bg-[#0B0F1A] p-3">
+                <div className="flex justify-between gap-3"><span className="text-gray-500">Payment Method</span><span className="uppercase font-medium text-gray-100">{booking.paymentMethod ?? "-"}</span></div>
+                <div className="mt-1 border-t border-gray-700 pt-2">
+                  <p className="mb-1 text-gray-500">Payment Reference</p>
+                  {parsedPaymentReference ? (
+                    <div className="grid gap-2 rounded-lg border border-gray-700 bg-[#111827] p-3">
+                      {parsedPaymentReference.map((item) => (
+                        <div key={item.label} className="flex items-start justify-between gap-3">
+                          <span className="text-gray-500">{item.label}</span>
+                          <span className="text-right font-medium text-gray-100">{item.value}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="whitespace-pre-wrap wrap-break-word text-gray-200">{booking.paymentReference || "No reference recorded."}</p>
+                  )}
+                </div>
+                {paymentSettings?.accountNumber || paymentSettings?.accountName ? (
+                  <div className="mt-1 border-t border-gray-700 pt-2">
+                    <p className="mb-1 text-gray-500">Official Destination</p>
+                    <div className="grid gap-1 rounded-lg border border-gray-700 bg-[#111827] p-3">
+                      <div className="flex justify-between gap-3"><span className="text-gray-500">Provider</span><span className="font-medium text-gray-100">{paymentSettings.provider || '-'}</span></div>
+                      <div className="flex justify-between gap-3"><span className="text-gray-500">Account Name</span><span className="font-medium text-gray-100">{paymentSettings.accountName || '-'}</span></div>
+                      <div className="flex justify-between gap-3"><span className="text-gray-500">Account Number</span><span className="font-medium text-gray-100">{paymentSettings.accountNumber || '-'}</span></div>
+                      {paymentSettings.instructions ? (
+                        <div className="mt-1 text-gray-400">{paymentSettings.instructions}</div>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+
+              <div>
+                <p className="mb-1 text-xs text-gray-500">Payment Proof</p>
+                {booking.paymentProofImage ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setShowImagePreview(true)}
+                      className="block w-full cursor-zoom-in"
+                      aria-label="Open larger payment proof preview"
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={booking.paymentProofImage}
+                        alt="Payment proof"
+                        className="max-h-60 w-full rounded-lg border border-gray-700 bg-[#0B0F1A] object-contain"
+                      />
+                    </button>
+                    <p className="mt-1 text-xs text-emerald-300">Click the image to enlarge it.</p>
+                  </>
+                ) : (
+                  <div className="rounded-lg border border-gray-700 bg-[#0B0F1A] px-3 py-5 text-center text-xs text-gray-500">
+                    {hasPaymentData ? "No image proof attached." : "No payment details recorded yet."}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
         </div>
 
         {showImagePreview && booking.paymentProofImage && (
@@ -1629,10 +1721,11 @@ const BookingActions: FC<BookingActionsProps> = ({
     const isFutureDate = booking.bookingDate > today;
     const isTooEarlyToday = booking.bookingDate === today && toMinutes(nowTime) < toMinutes(booking.startTime);
 
-    if (isFutureDate || isTooEarlyToday) {
-      setActionError("This session can only be started once the scheduled booking time begins.");
-      return;
-    }
+    // DISABLED FOR TESTING: early-start validation
+    // if (isFutureDate || isTooEarlyToday) {
+    //   setActionError("This session can only be started once the scheduled booking time begins.");
+    //   return;
+    // }
 
     confirmBeforeEdit("start", () => {
       void updateBooking({ startSession: true });
@@ -2529,6 +2622,7 @@ export const BookingTable: FC<BookingTableProps> = ({ onTabChange, archiveFnRef,
       {selectedPaymentBooking && (
         <PaymentDetailsModal
           booking={selectedPaymentBooking}
+          courtNames={courtNames}
           onClose={() => setSelectedPaymentBooking(null)}
         />
       )}

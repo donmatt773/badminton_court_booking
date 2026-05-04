@@ -75,6 +75,8 @@ export const typeDefs = `#graphql
     surfaceType: CourtSurfaceType!
     status: CourtStatus!
     price: Float!
+    weekdayRate: Float
+    weekendRate: Float
     createdAt: String!
     updatedAt: String!
   }

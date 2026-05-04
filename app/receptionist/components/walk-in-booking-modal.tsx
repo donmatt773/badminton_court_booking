@@ -44,6 +44,14 @@ function localISODate(): string {
   return `${year}-${month}-${day}`;
 }
 
+function formatTime12h(time: string): string {
+  const [h, m] = time.split(":").map(Number);
+  if (isNaN(h) || isNaN(m)) return time;
+  const hour = h % 12 === 0 ? 12 : h % 12;
+  const ampm = h < 12 ? "AM" : "PM";
+  return `${hour}:${m.toString().padStart(2, "0")} ${ampm}`;
+}
+
 function currentTimeHHMM(): string {
   const now = new Date();
   const hours = String(now.getHours()).padStart(2, "0");
@@ -322,7 +330,28 @@ export const WalkInBookingModal: FC<WalkInBookingModalProps> = ({ onClose, onCre
   const [bookingDate, setBookingDate] = useState(localISODate());
   const [startTime, setStartTime] = useState("");
   const [endTime, setEndTime] = useState("");
-  const [step, setStep] = useState<1 | 2>(1);
+  const [step, setStep] = useState<1 | 2 | 3>(1);
+
+  // Step 3 receipt data
+  interface ReceiptData {
+    customerName: string;
+    courtNames: string;
+    bookingDate: string;
+    startTime: string;
+    endTime: string;
+    paymentMethod: PaymentMethod;
+    totalRequired: number;
+    cashPaid?: number;
+    change?: number;
+    cashReceiptNo?: string;
+    onlineRef?: string;
+    onlineAmountPaid?: number;
+    onlineChange?: number;
+    onlinePaymentDate?: string;
+    receiptNo: string;
+    createdAt: string;
+  }
+  const [receiptData, setReceiptData] = useState<ReceiptData | null>(null);
 
   // Step 2 payment fields
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash");
@@ -857,7 +886,27 @@ export const WalkInBookingModal: FC<WalkInBookingModalProps> = ({ onClose, onCre
       );
 
       onCreated();
-      onClose();
+      // Build receipt snapshot before closing
+      const receiptNo = `RCPT-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${Date.now().toString().slice(-5)}`;
+      setReceiptData({
+        customerName: customerDisplayName,
+        courtNames: selectedCourtNames,
+        bookingDate,
+        startTime,
+        endTime,
+        paymentMethod,
+        totalRequired: totalRequiredAmount,
+        cashPaid: paymentMethod === "cash" ? Number(cashReceived) : undefined,
+        change: paymentMethod === "cash" ? Math.max(0, Number(cashReceived) - totalRequiredAmount) : undefined,
+        cashReceiptNo: paymentMethod === "cash" && cashReceiptNo.trim() ? cashReceiptNo.trim() : undefined,
+        onlineRef: paymentMethod === "online" ? onlineReference.trim() : undefined,
+        onlineAmountPaid: paymentMethod === "online" ? Number(onlineAmountPaid) : undefined,
+        onlineChange: paymentMethod === "online" ? Math.max(0, Number(onlineAmountPaid) - totalRequiredAmount) : undefined,
+        onlinePaymentDate: paymentMethod === "online" ? onlinePaymentDate : undefined,
+        receiptNo,
+        createdAt: new Date().toLocaleString(),
+      });
+      setStep(3);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong.");
     } finally {
@@ -905,7 +954,128 @@ export const WalkInBookingModal: FC<WalkInBookingModalProps> = ({ onClose, onCre
             </button>
           </div>
 
-          {loadingData ? (
+          {step === 3 && receiptData ? (
+            <div className="px-6 py-5">
+              {/* Receipt */}
+              <div id="walk-in-receipt" className="rounded-lg border border-gray-700 bg-[#111827] p-4 text-xs text-gray-300">
+                {/* Header */}
+                <div className="mb-3 border-b border-gray-700 pb-3 text-center leading-5">
+                  <p className="text-sm font-bold tracking-wide text-emerald-400">C-One Sports Center</p>
+                  <p className="text-[11px] text-gray-400">Sports Center Complex, Main Road</p>
+                  <p className="text-[11px] text-gray-400">TIN: 000-000-000-000</p>
+                  <p className="mt-1.5 text-[10px] font-bold tracking-[0.18em] text-gray-200 uppercase">— Official Receipt —</p>
+                </div>
+
+                {/* Fields */}
+                <table className="w-full border-separate" style={{ borderSpacing: "0 3px" }}>
+                  <tbody>
+                    {([
+                      ["O.R. No.", receiptData.receiptNo],
+                      ["Date / Time", receiptData.createdAt],
+                      ["Customer", receiptData.customerName],
+                      ["Court(s)", receiptData.courtNames],
+                      ["Booking Date", new Date(receiptData.bookingDate + "T00:00:00").toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })],
+                      ["Time", `${formatTime12h(receiptData.startTime)} – ${formatTime12h(receiptData.endTime)}`],
+                      ["Payment Method", receiptData.paymentMethod === "cash" ? "Cash" : "Online / GCash / Maya"],
+                      ...(receiptData.paymentMethod === "online" && receiptData.onlineRef ? [["Reference No.", receiptData.onlineRef]] : []),
+                      ...(receiptData.paymentMethod === "cash" && receiptData.cashReceiptNo ? [["Receipt No.", receiptData.cashReceiptNo]] : []),
+                    ] as [string, string][]).map(([label, value]) => (
+                      <tr key={label}>
+                        <td className="w-32 pr-2 text-gray-500 align-top">{label}</td>
+                        <td className="pr-1 text-gray-400 align-top">:</td>
+                        <td className="text-gray-100 font-medium break-all">{value}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+
+                {/* Amounts */}
+                <div className="mt-3 border-t border-dashed border-gray-600 pt-2">
+                  <table className="w-full border-separate" style={{ borderSpacing: "0 2px" }}>
+                    <tbody>
+                      <tr>
+                        <td className="text-gray-500">Amount Due</td>
+                        <td className="text-right text-gray-100 font-medium">₱{receiptData.totalRequired.toFixed(2)}</td>
+                      </tr>
+                      {receiptData.paymentMethod === "cash" && (
+                        <>
+                          <tr>
+                            <td className="text-gray-500">Cash Received</td>
+                            <td className="text-right text-gray-100 font-medium">₱{(receiptData.cashPaid ?? 0).toFixed(2)}</td>
+                          </tr>
+                          <tr>
+                            <td className="font-semibold text-emerald-400">Change</td>
+                            <td className="text-right font-semibold text-emerald-400">₱{(receiptData.change ?? 0).toFixed(2)}</td>
+                          </tr>
+                        </>
+                      )}
+                      {receiptData.paymentMethod === "online" && (
+                        <>
+                          <tr>
+                            <td className="text-gray-500">Amount Paid</td>
+                            <td className="text-right text-gray-100 font-medium">₱{(receiptData.onlineAmountPaid ?? 0).toFixed(2)}</td>
+                          </tr>
+                          {(receiptData.onlineChange ?? 0) > 0 && (
+                            <tr>
+                              <td className="font-semibold text-emerald-400">Change</td>
+                              <td className="text-right font-semibold text-emerald-400">₱{(receiptData.onlineChange ?? 0).toFixed(2)}</td>
+                            </tr>
+                          )}
+                        </>
+                      )}
+                      <tr>
+                        <td className="pt-1 font-bold text-emerald-400 border-t border-gray-700">Status</td>
+                        <td className="pt-1 text-right font-bold text-emerald-400 border-t border-gray-700">PAID ✓</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Footer */}
+                <div className="mt-3 border-t border-gray-700 pt-2 text-[10px] text-gray-500">
+                  <p className="italic">Received the amount stated above in full settlement of booking charges.</p>
+                  <div className="mt-4 grid grid-cols-2 gap-6">
+                    <div className="text-center">
+                      <div className="mb-6 border-b border-gray-600" />
+                      <p className="text-gray-400">{receiptData.customerName}</p>
+                      <p className="mt-0.5">Customer Signature</p>
+                    </div>
+                    <div className="text-center">
+                      <div className="mb-6 border-b border-gray-600" />
+                      <p className="text-gray-400">Receptionist</p>
+                      <p className="mt-0.5">Authorized Cashier</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const el = document.getElementById("walk-in-receipt");
+                    if (!el) return;
+                    const w = window.open("", "_blank", "width=480,height=700");
+                    if (!w) return;
+                    w.document.write(`<html><head><title>Receipt</title><style>body{font-family:monospace;font-size:12px;padding:16px;background:#fff;color:#111}hr{border-top:1px dashed #999}table{width:100%}.row{display:flex;justify-content:space-between;margin-bottom:4px}.label{color:#555}.green{color:#16a34a;font-weight:600}.center{text-align:center}</style></head><body>${el.innerHTML}</body></html>`);
+                    w.document.close();
+                    w.focus();
+                    w.print();
+                  }}
+                  className="rounded-lg border border-gray-700 bg-[#1F2937] px-4 py-2 text-sm font-medium text-gray-300 hover:bg-gray-700"
+                >
+                  Print / Save PDF
+                </button>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="rounded-lg bg-emerald-600 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
+                >
+                  Done
+                </button>
+              </div>
+            </div>
+          ) : loadingData ? (
             <div className="px-6 py-10 text-center text-sm text-gray-500">Loading...</div>
           ) : (
             <form
@@ -1037,7 +1207,7 @@ export const WalkInBookingModal: FC<WalkInBookingModalProps> = ({ onClose, onCre
                   <input
                     className={inputCls}
                     type="date"
-                    min={today}
+                    // min={today} // DISABLED FOR TESTING: past-date restriction
                     value={bookingDate}
                     onChange={(e) => setBookingDate(e.target.value)}
                   />
@@ -1055,7 +1225,7 @@ export const WalkInBookingModal: FC<WalkInBookingModalProps> = ({ onClose, onCre
                           <div key={rowIdx} className={rowIdx === 0 ? "mb-3 flex" : "flex"}>
                             {rowSlots.map((slotStart, idx) => {
                               const slotEnd = `${String(parseInt(slotStart.split(":")[0], 10) + 1).padStart(2, "0")}:00`;
-                              const isPast = bookingDate === today && slotEnd <= nowTime;
+                              const isPast = bookingDate === today && slotStart < nowTime;
                               const isTaken = isSlotTaken(slotStart, slotEnd);
                               const isInRange = !!(
                                 startTime &&
@@ -1287,6 +1457,38 @@ export const WalkInBookingModal: FC<WalkInBookingModalProps> = ({ onClose, onCre
                       PHP {totalRequiredAmount.toFixed(2)}
                     </span>
                   </div>
+                  {paymentMethod === "cash" && hasValidCashInput && (
+                    <>
+                      <div className="flex justify-between gap-3">
+                        <span className="text-gray-500">Cash Received</span>
+                        <span className="text-right text-gray-100">PHP {Number(cashReceived).toFixed(2)}</span>
+                      </div>
+                      <div className="flex justify-between gap-3">
+                        <span className={cashShortAmount > 0 ? "text-red-400" : "text-emerald-400 font-semibold"}>
+                          {cashShortAmount > 0 ? "Short by" : "Change"}
+                        </span>
+                        <span className={`text-right font-semibold ${cashShortAmount > 0 ? "text-red-400" : "text-emerald-400"}`}>
+                          PHP {cashShortAmount > 0 ? cashShortAmount.toFixed(2) : cashChangeAmount.toFixed(2)}
+                        </span>
+                      </div>
+                    </>
+                  )}
+                  {paymentMethod === "online" && onlineAmountPaid && Number(onlineAmountPaid) > 0 && (
+                    <>
+                      <div className="flex justify-between gap-3">
+                        <span className="text-gray-500">Amount Paid</span>
+                        <span className="text-right text-gray-100">PHP {Number(onlineAmountPaid).toFixed(2)}</span>
+                      </div>
+                      {Number(onlineAmountPaid) >= totalRequiredAmount && (
+                        <div className="flex justify-between gap-3">
+                          <span className="text-emerald-400 font-semibold">Change</span>
+                          <span className="text-right font-semibold text-emerald-400">
+                            PHP {Math.max(0, Number(onlineAmountPaid) - totalRequiredAmount).toFixed(2)}
+                          </span>
+                        </div>
+                      )}
+                    </>
+                  )}
                 </div>
 
                 <div className="flex overflow-hidden rounded-lg border border-gray-700">

@@ -4,10 +4,11 @@ import { BlockedSlotModel } from "@/lib/server/graphql/models/BlockedSlot";
 import { CourtModel } from "@/lib/server/graphql/models/Court";
 import { triggerBlockedSlotsUpdated } from "@/lib/server/pusher-server";
 import { getFriendlyErrorMessage } from "@/lib/server/friendly-error";
+import { resolveCourtHourlyRateForDate } from "@/lib/server/bookings/pricing";
 import { z } from "zod";
 
 const updateSessionSchema = z.object({
-  action: z.enum(["begin", "end"]),
+  action: z.enum(["begin", "end", "pause", "resume"]),
 });
 
 const patchSchema = z.object({
@@ -15,6 +16,8 @@ const patchSchema = z.object({
   groupRepresentative: z.string().trim().min(2).max(120).optional(),
   reason: z.string().trim().max(200).nullable().optional(),
   recurrenceWeekdays: z.array(z.number().int().min(0).max(6)).max(7).nullable().optional(),
+  reminderSeen: z.boolean().optional(),
+  isArchived: z.boolean().optional(),
   startTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
   endTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
   bookingDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
@@ -92,6 +95,10 @@ export async function PUT(
       return Response.json({ error: { message: "Blocked record not found" } }, { status: 404 });
     }
 
+    if (blockedSlot.isArchived) {
+      return Response.json({ error: { message: "Archived blocked records cannot be started or updated" } }, { status: 400 });
+    }
+
     if (body.action === "begin") {
       if (blockedSlot.sessionStartedAt && !blockedSlot.sessionEndedAt) {
         return Response.json({ error: { message: "Session already started" } }, { status: 400 });
@@ -102,7 +109,7 @@ export async function PUT(
       }
 
       const court = await CourtModel.findById(blockedSlot.courtId);
-      const hourlyRateSnapshot = Math.max(0, court?.price ?? 0);
+      const hourlyRateSnapshot = Math.max(0, resolveCourtHourlyRateForDate(court ?? {}, String(blockedSlot.bookingDate)));
       const now = new Date();
 
       const updatedBeginRecord = await BlockedSlotModel.findByIdAndUpdate(
@@ -110,13 +117,14 @@ export async function PUT(
         {
           $set: {
             sessionStartedAt: now,
+            sessionPausedAt: null,
             sessionEndedAt: null,
             hourlyRateSnapshot,
             actualDurationHours: null,
             chargedAmount: null,
           },
         },
-        { new: true }
+        { new: true, strict: false }
       );
 
       if (!updatedBeginRecord) {
@@ -129,6 +137,50 @@ export async function PUT(
       });
 
       return Response.json({ data: updatedBeginRecord });
+    }
+
+    if (body.action === "pause") {
+      if (!blockedSlot.sessionStartedAt || blockedSlot.sessionEndedAt) {
+        return Response.json({ error: { message: "No active session to pause" } }, { status: 400 });
+      }
+      if (blockedSlot.sessionPausedAt) {
+        return Response.json({ error: { message: "Session is already paused" } }, { status: 400 });
+      }
+
+      const updatedPauseRecord = await BlockedSlotModel.findByIdAndUpdate(
+        id,
+        { $set: { sessionPausedAt: new Date() } },
+        { new: true, strict: false }
+      );
+
+      if (!updatedPauseRecord) {
+        return Response.json({ error: { message: "Blocked record not found" } }, { status: 404 });
+      }
+
+      await triggerBlockedSlotsUpdated({ action: "updated", blockedSlotId: id });
+      return Response.json({ data: updatedPauseRecord });
+    }
+
+    if (body.action === "resume") {
+      if (!blockedSlot.sessionStartedAt || blockedSlot.sessionEndedAt) {
+        return Response.json({ error: { message: "No active session to resume" } }, { status: 400 });
+      }
+      if (!blockedSlot.sessionPausedAt) {
+        return Response.json({ error: { message: "Session is not paused" } }, { status: 400 });
+      }
+
+      const updatedResumeRecord = await BlockedSlotModel.findByIdAndUpdate(
+        id,
+        { $set: { sessionPausedAt: null } },
+        { new: true, strict: false }
+      );
+
+      if (!updatedResumeRecord) {
+        return Response.json({ error: { message: "Blocked record not found" } }, { status: 404 });
+      }
+
+      await triggerBlockedSlotsUpdated({ action: "updated", blockedSlotId: id });
+      return Response.json({ data: updatedResumeRecord });
     }
 
     if (!blockedSlot.sessionStartedAt) {
@@ -173,6 +225,7 @@ export async function PUT(
 
         const existingNextRecord = await BlockedSlotModel.findOne({
           courtId: blockedSlot.courtId,
+          isArchived: { $ne: true },
           bookingDate: nextBookingDate,
           startTime: blockedSlot.startTime,
           endTime: blockedSlot.endTime,
@@ -209,17 +262,31 @@ export async function PUT(
       id,
       {
         $set: {
+          sessionPausedAt: null,
           sessionEndedAt: endedAt,
           actualDurationHours: durationHours,
           chargedAmount,
         },
       },
-      { new: true }
+      { new: true, strict: false }
     );
 
     if (!updatedEndRecord) {
       return Response.json({ error: { message: "Blocked record not found" } }, { status: 404 });
     }
+
+    await BlockedSlotModel.create({
+      courtId: blockedSlot.courtId,
+      bookingDate: blockedSlot.bookingDate,
+      recurrenceUntilDate: null,
+      recurrenceWeekdays: null,
+      startTime: blockedSlot.startTime,
+      endTime: blockedSlot.endTime,
+      groupName: blockedSlot.groupName ?? null,
+      groupRepresentative: blockedSlot.groupRepresentative ?? null,
+      reason: blockedSlot.reason ?? null,
+      createdByUserId: blockedSlot.createdByUserId ?? null,
+    });
 
     await triggerBlockedSlotsUpdated({
       action: "updated",
@@ -245,7 +312,7 @@ export async function PATCH(
 ): Promise<Response> {
   try {
     await ensureGraphQLRuntimeStarted();
-    await requireAdminSession();
+    const session = await requireAdminSession();
 
     const body = patchSchema.parse(await request.json());
     const { id } = await context.params;
@@ -262,6 +329,14 @@ export async function PATCH(
     if (body.groupName !== undefined) updateFields.groupName = body.groupName;
     if (body.groupRepresentative !== undefined) updateFields.groupRepresentative = body.groupRepresentative;
     if (body.reason !== undefined) updateFields.reason = body.reason ?? null;
+    if (body.reminderSeen !== undefined) {
+      updateFields.reminderSeenAt = body.reminderSeen ? new Date() : null;
+    }
+    if (body.isArchived !== undefined) {
+      updateFields.isArchived = body.isArchived;
+      updateFields.archivedAt = body.isArchived ? new Date() : null;
+      updateFields.archivedByUserId = body.isArchived ? session.userId : null;
+    }
     if (body.recurrenceWeekdays !== undefined) {
       updateFields.recurrenceWeekdays = body.recurrenceWeekdays && body.recurrenceWeekdays.length > 0
         ? Array.from(new Set(body.recurrenceWeekdays)).sort((left, right) => left - right)
@@ -316,7 +391,11 @@ export async function DELETE(
 ): Promise<Response> {
   try {
     await ensureGraphQLRuntimeStarted();
-    await requireAdminSession();
+    const session = await requireAdminSession();
+
+    if (session.role !== "ADMIN") {
+      return Response.json({ error: { message: "Forbidden" } }, { status: 403 });
+    }
 
     const { id } = await context.params;
     const deleted = await BlockedSlotModel.findByIdAndDelete(id);

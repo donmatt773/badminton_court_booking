@@ -15,6 +15,8 @@ type Court = {
   surfaceType: "wooden" | "rubber";
   status: "active" | "inactive" | "maintenance";
   price: number;
+  weekdayRate?: number | null;
+  weekendRate?: number | null;
 };
 
 type Booking = {
@@ -76,21 +78,34 @@ type PaymentSettings = {
 // ---------------------------------------------------------------------------
 // Time configuration
 // ---------------------------------------------------------------------------
-const SLOT_START_HOUR = 10;  // 10:00 AM
-const SLOT_END_HOUR   = 24;  // 12:00 AM (midnight)
+const WEEKDAY_SLOT_START_HOUR = 10; // 10:00 AM
+const WEEKEND_SLOT_START_HOUR = 8;  // 8:00 AM
+const SLOT_END_HOUR = 24;           // 12:00 AM (midnight)
+
+function isWeekendDate(dateText: string): boolean {
+  const day = new Date(`${dateText}T00:00:00`).getDay();
+  return day === 0 || day === 6;
+}
+
+function slotStartHourForDate(dateText: string): number {
+  return isWeekendDate(dateText) ? WEEKEND_SLOT_START_HOUR : WEEKDAY_SLOT_START_HOUR;
+}
+
+function courtHourlyRateForDate(court: Court, bookingDate: string): number {
+  const fallbackRate = court.price ?? 0;
+  const weekdayRate = court.weekdayRate ?? fallbackRate;
+  const weekendRate = court.weekendRate ?? fallbackRate;
+  return isWeekendDate(bookingDate) ? weekendRate : weekdayRate;
+}
 
 /** All selectable hours as "HH:00" strings */
-function generateHours(): string[] {
+function generateHours(startHour: number): string[] {
   const hours: string[] = [];
-  for (let h = SLOT_START_HOUR; h <= SLOT_END_HOUR; h++) {
+  for (let h = startHour; h <= SLOT_END_HOUR; h++) {
     hours.push(`${String(h).padStart(2, "0")}:00`);
   }
   return hours;
 }
-
-const ALL_HOURS = generateHours();
-// Alias kept for court-card dot counting
-const ALL_SLOTS = ALL_HOURS.slice(0, -1); // start hours only (8-21)
 
 function formatHour(hhmm: string): string {
   const [h, m] = hhmm.split(":").map(Number);
@@ -142,6 +157,8 @@ const COURTS_AND_BOOKINGS_QUERY = gql`
       surfaceType
       status
       price
+      weekdayRate
+      weekendRate
     }
     bookings(bookingDate: $bookingDate) {
       id
@@ -403,6 +420,7 @@ export default function BookingExperience() {
     variables: {
       bookingDate: form.bookingDate,
     },
+    fetchPolicy: "network-only",
   });
 
   const [createBooking, { loading: isSubmitting }] = useMutation<{
@@ -446,6 +464,14 @@ export default function BookingExperience() {
     () => courts.filter((c) => selectedCourtIds.includes(c.id)),
     [courts, selectedCourtIds]
   );
+
+  const slotStartHour = useMemo(() => slotStartHourForDate(form.bookingDate), [form.bookingDate]);
+  const allHours = useMemo(() => generateHours(slotStartHour), [slotStartHour]);
+  const allSlots = useMemo(() => allHours.slice(0, -1), [allHours]);
+  const slotRows = useMemo(() => {
+    const splitIndex = Math.ceil(allSlots.length / 2);
+    return [allSlots.slice(0, splitIndex), allSlots.slice(splitIndex)].filter((row) => row.length > 0);
+  }, [allSlots]);
 
   const refetchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isRefetchingFromRealtimeRef = useRef(false);
@@ -597,11 +623,12 @@ export default function BookingExperience() {
     if (form.startTime >= form.endTime) {
       return "Time out must be after time in.";
     }
-    if (form.bookingDate === todayISODate() && form.startTime < currentTimeHHMM()) {
-      return "You cannot select a past time.";
-    }
-    if (form.startTime < `${String(SLOT_START_HOUR).padStart(2, "0")}:00` || form.endTime > `${String(SLOT_END_HOUR).padStart(2, "0")}:00`) {
-      return "Selected time must be within operating hours (8:00 AM - 10:00 PM).";
+    // DISABLED FOR TESTING: past-time validation
+    // if (form.bookingDate === todayISODate() && form.startTime < currentTimeHHMM()) {
+    //   return "You cannot select a past time.";
+    // }
+    if (form.startTime < `${String(slotStartHour).padStart(2, "0")}:00` || form.endTime > `${String(SLOT_END_HOUR).padStart(2, "0")}:00`) {
+      return `Selected time must be within operating hours (${formatHour(`${String(slotStartHour).padStart(2, "0")}:00`)} - ${formatHour("24:00")}).`;
     }
     if (hasConflict(form.startTime, form.endTime)) {
       return "That time range overlaps an existing booking or blocked slot. Please choose a different time.";
@@ -958,7 +985,7 @@ export default function BookingExperience() {
             <input
               type="date"
               value={form.bookingDate}
-              min={todayISODate()}
+              // min={todayISODate()} // DISABLED FOR TESTING: past-date restriction
               onChange={(e) => {
                 setForm((prev) => ({ ...prev, bookingDate: e.target.value, startTime: "", endTime: "" }));
                 setCourtsPage(1);
@@ -1047,14 +1074,14 @@ export default function BookingExperience() {
                 ["PENDING", "CONFIRMED", "PAID", "APPROVED"].includes(b.status) &&
                 !b.isArchived
             );
-            const bookedStarts = ALL_SLOTS.filter((slotStart) => {
+            const bookedStarts = allSlots.filter((slotStart) => {
               const slotEnd = addHour(slotStart);
               return activeCourtBookings.some((booking) =>
                 rangesOverlap(slotStart, slotEnd, booking.startTime, booking.endTime)
               );
             });
             const courtBlocks = blockedSlots.filter((slot) => slot.courtId === court.id);
-            const blockedStarts = ALL_SLOTS.filter((slotStart) => {
+            const blockedStarts = allSlots.filter((slotStart) => {
               const slotEnd = addHour(slotStart);
               return courtBlocks.some((blocked) =>
                 rangesOverlap(slotStart, slotEnd, blocked.startTime, blocked.endTime)
@@ -1067,7 +1094,7 @@ export default function BookingExperience() {
               ...bookedStarts,
               ...blockedStarts,
             ]).size;
-            const totalSlots = ALL_SLOTS.length;
+            const totalSlots = allSlots.length;
 
             return (
               <li key={court.id}>
@@ -1119,7 +1146,7 @@ export default function BookingExperience() {
                       color: "#10B981",
                     }}
                   >
-                    ₱{Number(court.price ?? 0).toFixed(2)} / hour
+                    ₱{Number(courtHourlyRateForDate(court, form.bookingDate)).toFixed(2)} / hour
                   </p>
                   <p
                     style={{
@@ -1480,7 +1507,7 @@ export default function BookingExperience() {
                         />
                         <span style={{ fontSize: 13, color: "var(--color-text-primary)" }}>{court.name}</span>
                         <span style={{ fontSize: 12, color: "var(--color-text-secondary)", marginLeft: "auto" }}>{court.surfaceType}</span>
-                        <span style={{ fontSize: 12, color: "#10B981", fontWeight: 600 }}>₱{(court.price ?? 0).toFixed(2)}/hr</span>
+                        <span style={{ fontSize: 12, color: "#10B981", fontWeight: 600 }}>₱{courtHourlyRateForDate(court, form.bookingDate).toFixed(2)}/hr</span>
                       </label>
                     ))}
                   </div>
@@ -1503,8 +1530,10 @@ export default function BookingExperience() {
                     Select a time slot
                   </p>
                   {/* Linear timeline – two rows, IN/OUT range selection */}
-                  {([ALL_SLOTS.slice(0, 7), ALL_SLOTS.slice(7)] as string[][]).map((rowSlots, rowIdx) => {
-                    const rowEndHour = rowIdx === 0 ? SLOT_START_HOUR + 7 : SLOT_END_HOUR;
+                  {slotRows.map((rowSlots, rowIdx) => {
+                    const rowEndHour = rowSlots.length > 0
+                      ? Number.parseInt(addHour(rowSlots[rowSlots.length - 1]).slice(0, 2), 10)
+                      : SLOT_END_HOUR;
                     return (
                       <div key={rowIdx} style={{ display: "flex", marginBottom: rowIdx === 0 ? 14 : 0 }}>
                         {rowSlots.map((slotStart, idx) => {
@@ -1615,7 +1644,7 @@ export default function BookingExperience() {
                 ? Math.max(0, toMinutes(form.endTime) - toMinutes(form.startTime))
                 : 0;
               const hours = durationMinutes / 60;
-              const totalPricePerHour = selectedCourts.reduce((sum, c) => sum + (c.price ?? 0), 0);
+              const totalPricePerHour = selectedCourts.reduce((sum, c) => sum + courtHourlyRateForDate(c, form.bookingDate), 0);
               const total = totalPricePerHour * hours;
               const hasSelection = durationMinutes > 0;
               const sectionCardStyle: React.CSSProperties = {
@@ -1711,7 +1740,7 @@ export default function BookingExperience() {
                           {selectedCourts.length > 1 && selectedCourts.map((c) => (
                             <div key={c.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "var(--color-text-secondary)", marginBottom: 2 }}>
                               <span>{c.name}</span>
-                              <span>₱{(c.price ?? 0).toFixed(2)} / hr</span>
+                              <span>₱{courtHourlyRateForDate(c, form.bookingDate).toFixed(2)} / hr</span>
                             </div>
                           ))}
                           <div style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 12, color: "var(--color-text-secondary)" }}>

@@ -54,8 +54,30 @@ const blockedSlotSchema = new Schema(
       type: Date,
       default: null,
     },
+    sessionPausedAt: {
+      type: Date,
+      default: null,
+    },
     sessionEndedAt: {
       type: Date,
+      default: null,
+    },
+    reminderSeenAt: {
+      type: Date,
+      default: null,
+    },
+    isArchived: {
+      type: Boolean,
+      default: false,
+    },
+    archivedAt: {
+      type: Date,
+      default: null,
+    },
+    archivedByUserId: {
+      type: String,
+      trim: true,
+      maxlength: 64,
       default: null,
     },
     hourlyRateSnapshot: {
@@ -90,13 +112,37 @@ blockedSlotSchema.index({ bookingDate: 1, createdAt: -1 });
 
 const existingBlockedSlotModel = models.BlockedSlot;
 
-if (existingBlockedSlotModel && !existingBlockedSlotModel.schema.path("recurrenceWeekdays")) {
-  existingBlockedSlotModel.schema.add({
-    recurrenceWeekdays: {
-      type: [Number],
-      default: null,
-    },
-  });
+if (existingBlockedSlotModel) {
+  if (!existingBlockedSlotModel.schema.path("recurrenceWeekdays")) {
+    existingBlockedSlotModel.schema.add({
+      recurrenceWeekdays: { type: [Number], default: null },
+    });
+  }
+  if (!existingBlockedSlotModel.schema.path("sessionPausedAt")) {
+    existingBlockedSlotModel.schema.add({
+      sessionPausedAt: { type: Date, default: null },
+    });
+  }
+  if (!existingBlockedSlotModel.schema.path("reminderSeenAt")) {
+    existingBlockedSlotModel.schema.add({
+      reminderSeenAt: { type: Date, default: null },
+    });
+  }
+  if (!existingBlockedSlotModel.schema.path("isArchived")) {
+    existingBlockedSlotModel.schema.add({
+      isArchived: { type: Boolean, default: false },
+    });
+  }
+  if (!existingBlockedSlotModel.schema.path("archivedAt")) {
+    existingBlockedSlotModel.schema.add({
+      archivedAt: { type: Date, default: null },
+    });
+  }
+  if (!existingBlockedSlotModel.schema.path("archivedByUserId")) {
+    existingBlockedSlotModel.schema.add({
+      archivedByUserId: { type: String, trim: true, maxlength: 64, default: null },
+    });
+  }
 }
 
 export const BlockedSlotModel = existingBlockedSlotModel ?? model("BlockedSlot", blockedSlotSchema);

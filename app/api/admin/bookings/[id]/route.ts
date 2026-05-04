@@ -8,7 +8,7 @@ import { getFriendlyErrorMessage } from "@/lib/server/friendly-error";
 import { triggerBookingsUpdated } from "@/lib/server/pusher-server";
 import { graphQLEnv } from "@/lib/server/graphql/config/env";
 import { CourtModel } from "@/lib/server/graphql/models/Court";
-import { computeBookingPricing } from "@/lib/server/bookings/pricing";
+import { computeBookingPricing, resolveCourtHourlyRateForDate } from "@/lib/server/bookings/pricing";
 
 function localISODate(): string {
   const now = new Date();
@@ -209,12 +209,19 @@ export async function PUT(
         );
       }
 
-      const nextCourt = await CourtModel.findById(nextCourtId).select("price");
+      const nextCourt = await CourtModel.findById(nextCourtId).select("price weekdayRate weekendRate");
       if (!nextCourt) {
         return Response.json({ error: { message: "Court not found" } }, { status: 404 });
       }
 
-      Object.assign(updatePayload, computeBookingPricing(nextCourt.price ?? 0, nextStartTime, nextEndTime));
+      Object.assign(
+        updatePayload,
+        computeBookingPricing(
+          resolveCourtHourlyRateForDate(nextCourt, nextBookingDate),
+          nextStartTime,
+          nextEndTime
+        )
+      );
       updatePayload.pricingSnapshotSource = "recomputed_on_update";
     }
     delete updatePayload.confirmDenied;

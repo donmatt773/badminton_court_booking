@@ -24,10 +24,16 @@ type BlockedSlot = {
   reason?: string | null;
   sessionStartedAt?: string | null;
   sessionEndedAt?: string | null;
+  sessionPausedAt?: string | null;
+  reminderSeenAt?: string | null;
+  isArchived?: boolean;
+  archivedAt?: string | null;
+  archivedByUserId?: string | null;
   hourlyRateSnapshot?: number | null;
   actualDurationHours?: number | null;
   chargedAmount?: number | null;
   createdAt: string;
+  updatedAt?: string;
 };
 
 type GroupedBlockedRow = {
@@ -37,6 +43,8 @@ type GroupedBlockedRow = {
   slots: BlockedSlot[];
   courts: string[];
   totalRevenue: number;
+  unseenReminderCount: number;
+  seenReminderCount: number;
   runningCount: number;
   closedCount: number;
   scheduledCount: number;
@@ -74,9 +82,14 @@ const WEEKDAY_LABEL_BY_INDEX: Record<number, string> = {
   6: "Sat",
 };
 
-function blockedSlotSessionLabel(slot: BlockedSlot, today: string): "scheduled" | "not_started" | "running" | "closed" {
+
+function blockedSlotSessionLabel(slot: BlockedSlot, today: string): "scheduled" | "not_started" | "running" | "paused" | "closed" {
   if (slot.sessionStartedAt && slot.sessionEndedAt) {
     return "closed";
+  }
+
+  if (slot.sessionStartedAt && slot.sessionPausedAt && !slot.sessionEndedAt) {
+    return "paused";
   }
 
   if (slot.sessionStartedAt && !slot.sessionEndedAt) {
@@ -117,46 +130,6 @@ function todayISODate(): string {
   return `${year}-${month}-${day}`;
 }
 
-function currentMonthISO(): string {
-  return todayISODate().slice(0, 7);
-}
-
-function currentYearISO(): string {
-  return todayISODate().slice(0, 4);
-}
-
-function listDatesInMonth(month: string): string[] {
-  const [yearText, monthText] = month.split("-");
-  const year = Number(yearText);
-  const monthNumber = Number(monthText);
-  if (!Number.isInteger(year) || !Number.isInteger(monthNumber) || monthNumber < 1 || monthNumber > 12) {
-    return [];
-  }
-
-  const dates: string[] = [];
-  const totalDays = new Date(year, monthNumber, 0).getDate();
-  for (let day = 1; day <= totalDays; day += 1) {
-    dates.push(`${year}-${String(monthNumber).padStart(2, "0")}-${String(day).padStart(2, "0")}`);
-  }
-  return dates;
-}
-
-function listDatesInYear(yearText: string): string[] {
-  const year = Number(yearText);
-  if (!Number.isInteger(year)) {
-    return [];
-  }
-
-  const dates: string[] = [];
-  for (let month = 1; month <= 12; month += 1) {
-    const totalDays = new Date(year, month, 0).getDate();
-    for (let day = 1; day <= totalDays; day += 1) {
-      dates.push(`${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`);
-    }
-  }
-  return dates;
-}
-
 function currentTimeHHMM(): string {
   const now = new Date();
   const hours = String(now.getHours()).padStart(2, "0");
@@ -164,13 +137,15 @@ function currentTimeHHMM(): string {
   return `${hours}:${minutes}`;
 }
 
+function weekdayFromISODate(dateText: string): number {
+  return new Date(`${dateText}T00:00:00Z`).getUTCDay();
+}
+
 type NewBlockForm = {
-  mode: "daily" | "monthly" | "yearly";
   courtIds: string[];
   bookingDate: string;
-  bookingMonth: string;
-  bookingYear: string;
-  selectedWeekdays: number[];
+  recurrenceUntilDate: string;
+  recurrenceWeekdays: number[];
   startTime: string;
   endTime: string;
   groupName: string;
@@ -187,6 +162,8 @@ type ConfirmDialogState = {
 };
 
 export function BlockedSlotManager() {
+  const [currentUserRole, setCurrentUserRole] = useState<"ADMIN" | "RECEPTIONIST" | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
   const [courts, setCourts] = useState<Court[]>([]);
   const [blockedSlots, setBlockedSlots] = useState<BlockedSlot[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -195,10 +172,15 @@ export function BlockedSlotManager() {
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [popupMessage, setPopupMessage] = useState<string | null>(null);
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null);
+  const [archivedActionId, setArchivedActionId] = useState<string | null>(null);
+  const [archivedBulkAction, setArchivedBulkAction] = useState<"restore" | "delete" | null>(null);
   const [sessionActionId, setSessionActionId] = useState<string | null>(null);
-  const [groupSessionAction, setGroupSessionAction] = useState<"begin" | "end" | null>(null);
+  const [groupSessionAction, setGroupSessionAction] = useState<"begin" | "pause" | "resume" | "end" | null>(null);
   const [sessionRecordDate, setSessionRecordDate] = useState<string>("all");
+  const [reminderStatusFilter, setReminderStatusFilter] = useState<"all" | "unseen" | "seen">("all");
   const [groupModalKey, setGroupModalKey] = useState<string | null>(null);
+  const [groupModalSource, setGroupModalSource] = useState<"active" | "archived">("active");
+  const [showReminderModal, setShowReminderModal] = useState(false);
   const [nowTick, setNowTick] = useState<number>(() => Date.now());
 
   const [groupEditKey, setGroupEditKey] = useState<string | null>(null);
@@ -218,15 +200,13 @@ export function BlockedSlotManager() {
   const confirmResolverRef = useRef<((value: boolean) => void) | null>(null);
 
   const today = todayISODate();
-  const nowTime = currentTimeHHMM();
+  const isCurrentUserAdmin = currentUserRole === "ADMIN";
 
   const [form, setForm] = useState<NewBlockForm>({
-    mode: "daily",
     courtIds: [],
     bookingDate: todayISODate(),
-    bookingMonth: currentMonthISO(),
-    bookingYear: currentYearISO(),
-    selectedWeekdays: [],
+    recurrenceUntilDate: "",
+    recurrenceWeekdays: [],
     startTime: "08:00",
     endTime: "09:00",
     groupName: "",
@@ -235,26 +215,9 @@ export function BlockedSlotManager() {
   });
 
   const bookingDates = useMemo(() => {
-    let dates: string[] = [];
-    if (form.mode === "daily") {
-      dates = [form.bookingDate];
-    } else if (form.mode === "monthly") {
-      dates = listDatesInMonth(form.bookingMonth);
-    } else {
-      dates = listDatesInYear(form.bookingYear);
-    }
-
-    if (form.mode !== "daily" && form.selectedWeekdays.length > 0) {
-      const selectedWeekdaySet = new Set(form.selectedWeekdays);
-      dates = dates.filter((dateText) => {
-        const weekday = new Date(`${dateText}T00:00:00Z`).getUTCDay();
-        return selectedWeekdaySet.has(weekday);
-      });
-    }
-
-    const uniqueFutureDates = Array.from(new Set(dates)).filter((date) => date >= today).sort();
+    const uniqueFutureDates = Array.from(new Set([form.bookingDate])).filter((date) => date >= today).sort();
     return uniqueFutureDates;
-  }, [form.bookingDate, form.bookingMonth, form.bookingYear, form.mode, form.selectedWeekdays, today]);
+  }, [form.bookingDate]);
 
   const courtNameById = useMemo(() => {
     const map: Record<string, string> = {};
@@ -265,19 +228,103 @@ export function BlockedSlotManager() {
   }, [courts]);
 
   const sessionRecordDates = useMemo(
-    () => Array.from(new Set(blockedSlots.map((slot) => slot.bookingDate))).sort().reverse(),
+    () => Array.from(new Set(blockedSlots.filter((slot) => !slot.isArchived).map((slot) => slot.bookingDate))).sort().reverse(),
+    [blockedSlots]
+  );
+
+  const activeBlockedSlots = useMemo(
+    () => blockedSlots.filter((slot) => !slot.isArchived),
+    [blockedSlots]
+  );
+
+  const archivedBlockedSlots = useMemo(
+    () => blockedSlots.filter((slot) => !!slot.isArchived),
     [blockedSlots]
   );
 
   const filteredBlockedSlots = useMemo(() => {
-    return blockedSlots.filter((slot) =>
-      sessionRecordDate === "all" || slot.bookingDate === sessionRecordDate
-    );
-  }, [blockedSlots, sessionRecordDate]);
+    return activeBlockedSlots.filter((slot) => {
+      const matchesDate = sessionRecordDate === "all" || slot.bookingDate === sessionRecordDate;
+      const matchesReminderStatus =
+        reminderStatusFilter === "all"
+          ? true
+          : reminderStatusFilter === "unseen"
+            ? !slot.reminderSeenAt
+            : !!slot.reminderSeenAt;
 
-  const completedFilteredSessions = useMemo(
-    () => filteredBlockedSlots.filter((slot) => typeof slot.chargedAmount === "number"),
-    [filteredBlockedSlots]
+      return matchesDate && matchesReminderStatus;
+    });
+  }, [activeBlockedSlots, sessionRecordDate, reminderStatusFilter]);
+
+  const filteredArchivedSlots = useMemo(
+    () => archivedBlockedSlots.filter((slot) => sessionRecordDate === "all" || slot.bookingDate === sessionRecordDate),
+    [archivedBlockedSlots, sessionRecordDate]
+  );
+
+  const todayRecurringReminderSlots = useMemo(() => {
+    return activeBlockedSlots.filter((slot) => {
+      if (slot.sessionEndedAt) {
+        return false;
+      }
+
+      if (slot.bookingDate === today) {
+        return true;
+      }
+
+      if (!slot.recurrenceUntilDate) {
+        return false;
+      }
+
+      if (slot.bookingDate > today || slot.recurrenceUntilDate < today) {
+        return false;
+      }
+
+      const weekdays = Array.isArray(slot.recurrenceWeekdays)
+        ? Array.from(new Set(slot.recurrenceWeekdays)).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6)
+        : [];
+
+      if (weekdays.length === 0) {
+        return true;
+      }
+
+      return weekdays.includes(weekdayFromISODate(today));
+    });
+  }, [activeBlockedSlots, today]);
+
+  const todayRecurringReminderRows = useMemo(() => {
+    const groupedRows = new Map<string, { key: string; message: string; slotIds: string[]; unseenCount: number }>();
+
+    for (const slot of todayRecurringReminderSlots) {
+      const key = `${slot.courtId}-${slot.bookingDate}-${slot.startTime}-${slot.endTime}-${normalizedGroupName(slot)}`;
+      const courtName = courtNameById[slot.courtId] ?? slot.courtId;
+      const recurrenceLabel = slot.recurrenceUntilDate
+        ? `Recurs until ${slot.recurrenceUntilDate}`
+        : "One-day block";
+
+      const existing = groupedRows.get(key);
+      if (!existing) {
+        groupedRows.set(key, {
+          key,
+          message: `${courtName} • ${slot.bookingDate} ${formatTime12h(slot.startTime)}-${formatTime12h(slot.endTime)} • ${normalizedGroupName(slot)} (${recurrenceLabel})`,
+          slotIds: [slot._id],
+          unseenCount: slot.reminderSeenAt ? 0 : 1,
+        });
+        continue;
+      }
+
+      existing.slotIds.push(slot._id);
+      if (!slot.reminderSeenAt) {
+        existing.unseenCount += 1;
+      }
+      groupedRows.set(key, existing);
+    }
+
+    return Array.from(groupedRows.values());
+  }, [todayRecurringReminderSlots, courtNameById]);
+
+  const visibleReminderRows = useMemo(
+    () => todayRecurringReminderRows.filter((row) => row.unseenCount > 0),
+    [todayRecurringReminderRows]
   );
 
   useEffect(() => {
@@ -303,6 +350,8 @@ export function BlockedSlotManager() {
           slots: [slot],
           courts: [courtNameById[slot.courtId] ?? slot.courtId],
           totalRevenue: charged,
+          unseenReminderCount: slot.reminderSeenAt ? 0 : 1,
+          seenReminderCount: slot.reminderSeenAt ? 1 : 0,
           runningCount: sessionState === "running" ? 1 : 0,
           closedCount: sessionState === "closed" ? 1 : 0,
           scheduledCount: sessionState === "scheduled" ? 1 : 0,
@@ -317,6 +366,11 @@ export function BlockedSlotManager() {
         existing.courts.push(courtNameById[slot.courtId] ?? slot.courtId);
       }
       existing.totalRevenue += charged;
+      if (slot.reminderSeenAt) {
+        existing.seenReminderCount += 1;
+      } else {
+        existing.unseenReminderCount += 1;
+      }
       if (sessionState === "running") existing.runningCount += 1;
       if (sessionState === "closed") existing.closedCount += 1;
       if (sessionState === "scheduled") existing.scheduledCount += 1;
@@ -344,7 +398,9 @@ export function BlockedSlotManager() {
       return [] as BlockedSlot[];
     }
 
-    return blockedSlots
+    const sourceSlots = groupModalSource === "archived" ? archivedBlockedSlots : activeBlockedSlots;
+
+    return sourceSlots
       .filter((slot) => blockedGroupKey(slot) === groupModalKey)
       .sort((left, right) => {
         if (left.bookingDate !== right.bookingDate) {
@@ -357,7 +413,7 @@ export function BlockedSlotManager() {
         }
         return left.startTime.localeCompare(right.startTime);
       });
-  }, [blockedSlots, groupModalKey, courtNameById]);
+  }, [activeBlockedSlots, archivedBlockedSlots, groupModalKey, groupModalSource, courtNameById]);
 
   const groupModalDailyBreakdown = useMemo(() => {
     if (!groupModalKey) {
@@ -402,14 +458,18 @@ export function BlockedSlotManager() {
   );
 
   const groupBeginEligibleCount = useMemo(
-    () =>
-      groupModalMonitorSlots.filter(
-        (slot) =>
-          !slot.sessionStartedAt &&
-          slot.bookingDate <= today &&
-          (slot.bookingDate < today || nowTime >= slot.startTime)
-      ).length,
-    [groupModalMonitorSlots, today, nowTime]
+    () => groupModalMonitorSlots.filter((slot) => !slot.sessionStartedAt).length,
+    [groupModalMonitorSlots]
+  );
+
+  const groupPauseEligibleCount = useMemo(
+    () => groupModalMonitorSlots.filter((slot) => !!slot.sessionStartedAt && !slot.sessionPausedAt && !slot.sessionEndedAt).length,
+    [groupModalMonitorSlots]
+  );
+
+  const groupResumeEligibleCount = useMemo(
+    () => groupModalMonitorSlots.filter((slot) => !!slot.sessionStartedAt && !!slot.sessionPausedAt && !slot.sessionEndedAt).length,
+    [groupModalMonitorSlots]
   );
 
   const groupEndEligibleCount = useMemo(
@@ -439,10 +499,19 @@ export function BlockedSlotManager() {
     setError(null);
 
     try {
-      const [courtsRes, blockedRes] = await Promise.all([
+      const [courtsRes, meRes] = await Promise.all([
         fetch("/api/admin/courts", { cache: "no-store" }),
-        fetch("/api/admin/blocked-slots", { cache: "no-store" }),
+        fetch("/api/admin/me", { cache: "no-store" }),
       ]);
+
+      const meBody = (await meRes.json().catch(() => null)) as
+        | { data?: { role?: "ADMIN" | "RECEPTIONIST" } }
+        | null;
+      const role = meBody?.data?.role ?? null;
+      setCurrentUserRole(role);
+
+      const blockedQuery = role === "ADMIN" && showArchived ? "?includeArchived=1" : "";
+      const blockedRes = await fetch(`/api/admin/blocked-slots${blockedQuery}`, { cache: "no-store" });
 
       if (!courtsRes.ok) {
         throw new Error("Failed to load courts");
@@ -482,7 +551,7 @@ export function BlockedSlotManager() {
 
   useEffect(() => {
     void loadData();
-  }, []);
+  }, [showArchived]);
 
   useEffect(() => {
     const pusher = getPusherClient();
@@ -501,7 +570,45 @@ export function BlockedSlotManager() {
       channel.unbind(REALTIME_EVENTS.updated, handleUpdate);
       pusher.unsubscribe(REALTIME_CHANNELS.blockedSlots);
     };
-  }, []);
+  }, [showArchived]);
+
+  async function markReminderRowsSeen(rows: Array<{ slotIds: string[] }>): Promise<void> {
+    const slotIds = Array.from(new Set(rows.flatMap((row) => row.slotIds)));
+    if (slotIds.length === 0) {
+      return;
+    }
+
+    const optimisticSeenAt = new Date().toISOString();
+    setBlockedSlots((prev) =>
+      prev.map((slot) =>
+        slotIds.includes(slot._id)
+          ? {
+              ...slot,
+              reminderSeenAt: optimisticSeenAt,
+            }
+          : slot
+      )
+    );
+
+    const results = await Promise.allSettled(
+      slotIds.map((id) =>
+        fetch(`/api/admin/blocked-slots/${id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reminderSeen: true }),
+        })
+      )
+    );
+
+    const failed = results.some((result) => result.status === "rejected" || !result.value.ok);
+    if (failed) {
+      setError("Failed to mark one or more notifications as seen. Refreshing...");
+      await loadData();
+      return;
+    }
+
+    setSuccessMessage(slotIds.length === 1 ? "Notification marked as seen." : "Notifications marked as seen.");
+  }
 
   useEffect(() => {
     const interval = window.setInterval(() => {
@@ -536,6 +643,179 @@ export function BlockedSlotManager() {
     });
   }
 
+  async function archiveBlockedSlotById(id: string): Promise<boolean> {
+    const response = await fetch(`/api/admin/blocked-slots/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ isArchived: true }),
+    });
+
+    if (response.status === 404) {
+      return true;
+    }
+
+    if (!response.ok) {
+      const body = (await response.json().catch(() => null)) as
+        | { error?: { message?: string } }
+        | null;
+      throw new Error(body?.error?.message ?? "Failed to archive blocked slot");
+    }
+
+    return true;
+  }
+
+  async function restoreBlockedSlotById(id: string): Promise<boolean> {
+    const response = await fetch(`/api/admin/blocked-slots/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ isArchived: false }),
+    });
+
+    if (response.status === 404) {
+      return true;
+    }
+
+    if (!response.ok) {
+      const body = (await response.json().catch(() => null)) as
+        | { error?: { message?: string } }
+        | null;
+      throw new Error(body?.error?.message ?? "Failed to restore blocked slot");
+    }
+
+    return true;
+  }
+
+  async function deleteBlockedSlotPermanentlyById(id: string): Promise<boolean> {
+    const response = await fetch(`/api/admin/blocked-slots/${id}`, {
+      method: "DELETE",
+    });
+
+    if (response.status === 404) {
+      return true;
+    }
+
+    if (!response.ok) {
+      const body = (await response.json().catch(() => null)) as
+        | { error?: { message?: string } }
+        | null;
+      throw new Error(body?.error?.message ?? "Failed to delete blocked slot permanently");
+    }
+
+    return true;
+  }
+
+  async function handleRestoreArchivedSlot(id: string): Promise<void> {
+    setArchivedActionId(id);
+    setError(null);
+    setSuccessMessage(null);
+    try {
+      await restoreBlockedSlotById(id);
+      await loadData();
+      setSuccessMessage("Archived blocked record restored.");
+    } catch (restoreError) {
+      setError(restoreError instanceof Error ? restoreError.message : "Failed to restore archived blocked record");
+    } finally {
+      setArchivedActionId(null);
+    }
+  }
+
+  async function handleDeleteArchivedSlotPermanently(id: string): Promise<void> {
+    if (!isCurrentUserAdmin) {
+      return;
+    }
+
+    const confirmed = await requestConfirmation({
+      title: "Delete Permanently",
+      message: "Delete this archived blocked record permanently? This cannot be undone.",
+      confirmLabel: "Delete Permanently",
+      cancelLabel: "Cancel",
+      danger: true,
+    });
+
+    if (!confirmed) {
+      return;
+    }
+
+    setArchivedActionId(id);
+    setError(null);
+    setSuccessMessage(null);
+    try {
+      await deleteBlockedSlotPermanentlyById(id);
+      await loadData();
+      setSuccessMessage("Archived blocked record deleted permanently.");
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : "Failed to delete archived blocked record");
+    } finally {
+      setArchivedActionId(null);
+    }
+  }
+
+  async function handleRestoreAllArchived(): Promise<void> {
+    if (!isCurrentUserAdmin || filteredArchivedSlots.length === 0) {
+      return;
+    }
+
+    setArchivedBulkAction("restore");
+    setError(null);
+    setSuccessMessage(null);
+
+    let failed = 0;
+    for (const slot of filteredArchivedSlots) {
+      try {
+        await restoreBlockedSlotById(slot._id);
+      } catch {
+        failed += 1;
+      }
+    }
+
+    await loadData();
+    setArchivedBulkAction(null);
+
+    if (failed > 0) {
+      setError(`Failed to restore ${failed} archived record(s).`);
+    }
+    setSuccessMessage(`Restored ${filteredArchivedSlots.length - failed} archived record(s).`);
+  }
+
+  async function handleDeleteAllArchivedPermanently(): Promise<void> {
+    if (!isCurrentUserAdmin || filteredArchivedSlots.length === 0) {
+      return;
+    }
+
+    const confirmed = await requestConfirmation({
+      title: "Delete All Archived Permanently",
+      message: `Delete ${filteredArchivedSlots.length} archived blocked record(s) permanently? This cannot be undone.`,
+      confirmLabel: "Delete All",
+      cancelLabel: "Cancel",
+      danger: true,
+    });
+
+    if (!confirmed) {
+      return;
+    }
+
+    setArchivedBulkAction("delete");
+    setError(null);
+    setSuccessMessage(null);
+
+    let failed = 0;
+    for (const slot of filteredArchivedSlots) {
+      try {
+        await deleteBlockedSlotPermanentlyById(slot._id);
+      } catch {
+        failed += 1;
+      }
+    }
+
+    await loadData();
+    setArchivedBulkAction(null);
+
+    if (failed > 0) {
+      setError(`Failed to permanently delete ${failed} archived record(s).`);
+    }
+    setSuccessMessage(`Deleted ${filteredArchivedSlots.length - failed} archived record(s) permanently.`);
+  }
+
   async function handleCreateBlock(event: React.FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
 
@@ -560,11 +840,21 @@ export function BlockedSlotManager() {
     }
 
     if (bookingDates.length === 0) {
-      setError("No future dates found for the selected recurrence");
+      setError("Please select a valid booking date");
       return;
     }
 
-    if (bookingDates.includes(today) && form.startTime < nowTime) {
+    if (form.recurrenceUntilDate && form.recurrenceUntilDate < form.bookingDate) {
+      setError("Recurrence until date cannot be earlier than booking date");
+      return;
+    }
+
+    if (form.recurrenceWeekdays.length > 0 && !form.recurrenceUntilDate) {
+      setError("Please set recurrence until date when selecting recurrence weekdays");
+      return;
+    }
+
+    if (bookingDates.includes(today) && form.startTime < currentTimeHHMM()) {
       setError("Start time cannot be in the past");
       return;
     }
@@ -573,16 +863,9 @@ export function BlockedSlotManager() {
 
     if (totalRecords > 1) {
       const firstDate = bookingDates[0];
-      const lastDate = bookingDates[bookingDates.length - 1];
-      const modeLabel =
-        form.mode === "daily"
-          ? "daily multi-court"
-          : form.mode === "monthly"
-            ? "monthly recurring"
-            : "yearly recurring";
       const confirmed = await requestConfirmation({
-        title: "Confirm Recurring Block",
-        message: `You selected ${modeLabel} mode with ${form.courtIds.length} court(s). This will create ${form.courtIds.length} active record(s) and apply recurring blocking across ${bookingDates.length} date(s) (${firstDate} to ${lastDate}). Session records are generated one-by-one as sessions are processed. Continue?`,
+        title: "Confirm Block Creation",
+        message: `You selected ${form.courtIds.length} court(s). This will create ${totalRecords} record(s) for ${firstDate}. Continue?`,
         confirmLabel: "Yes, Create Records",
         cancelLabel: "Cancel",
       });
@@ -603,11 +886,10 @@ export function BlockedSlotManager() {
         body: JSON.stringify({
           courtIds: form.courtIds,
           bookingDates,
-          recurrenceWeekdays: form.mode === "daily" || form.selectedWeekdays.length === 0
-            ? undefined
-            : form.selectedWeekdays,
           startTime: form.startTime,
           endTime: form.endTime,
+          recurrenceUntilDate: form.recurrenceUntilDate || undefined,
+          recurrenceWeekdays: form.recurrenceWeekdays.length > 0 ? form.recurrenceWeekdays : undefined,
           groupName: form.groupName.trim(),
           groupRepresentative: form.groupRepresentative.trim(),
           reason: form.reason.trim() || undefined,
@@ -653,41 +935,86 @@ export function BlockedSlotManager() {
   }
 
   async function handleDeleteBlock(id: string): Promise<void> {
+    const confirmed = await requestConfirmation({
+      title: "Archive Blocked Court",
+      message: "This will archive the record (soft delete) and remove it from receptionist view.",
+      confirmLabel: "Archive",
+      cancelLabel: "Cancel",
+      danger: true,
+    });
+
+    if (!confirmed) {
+      return;
+    }
+
     setError(null);
     setSuccessMessage(null);
 
     try {
-      const response = await fetch(`/api/admin/blocked-slots/${id}`, {
-        method: "DELETE",
-      });
-
-      if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as
-          | { error?: { message?: string } }
-          | null;
-
-        if (response.status === 404) {
-          setError("This blocked record no longer exists. Refreshing list...");
-          await loadData();
-          return;
-        }
-
-        throw new Error(body?.error?.message ?? "Failed to delete blocked slot");
-      }
+      await archiveBlockedSlotById(id);
 
       setBlockedSlots((prev) => prev.filter((slot) => slot._id !== id));
+      setSuccessMessage("Blocked record archived.");
     } catch (deleteError) {
-      setError(deleteError instanceof Error ? deleteError.message : "Failed to delete blocked slot");
+      setError(deleteError instanceof Error ? deleteError.message : "Failed to archive blocked slot");
     }
   }
 
-  async function handleDeleteGroup(): Promise<void> {
+  async function handleArchiveGroup(): Promise<void> {
     if (!groupModalKey || groupModalSlots.length === 0 || isGroupDeleting) {
       return;
     }
 
     const confirmed = await requestConfirmation({
-      title: "Delete Blocking Group",
+      title: "Archive Blocking Group",
+      message: `Archive this blocking group? This will archive ${groupModalSlots.length} record(s) and hide them from receptionist view.`,
+      confirmLabel: "Archive Group",
+      cancelLabel: "Cancel",
+      danger: true,
+    });
+
+    if (!confirmed) {
+      return;
+    }
+
+    setError(null);
+    setSuccessMessage(null);
+    setIsGroupDeleting(true);
+
+    let failed = 0;
+    let firstFailureMessage: string | null = null;
+
+    for (const slot of groupModalSlots) {
+      try {
+        await archiveBlockedSlotById(slot._id);
+      } catch {
+        failed += 1;
+        if (!firstFailureMessage) {
+          firstFailureMessage = "Network error while archiving blocked records";
+        }
+      }
+    }
+
+    await loadData();
+
+    if (failed > 0) {
+      setError(firstFailureMessage ?? "Failed to archive one or more blocked records");
+      setSuccessMessage(`Archived ${groupModalSlots.length - failed} record(s). ${failed} failed.`);
+    } else {
+      setSuccessMessage(`Archived ${groupModalSlots.length} blocked record(s).`);
+      setGroupModalKey(null);
+    }
+
+    setIsGroupDeleting(false);
+  }
+
+  async function handleDeleteGroupPermanently(): Promise<void> {
+    if (!isCurrentUserAdmin || !groupModalKey || groupModalSlots.length === 0 || isGroupDeleting) {
+      return;
+    }
+
+    const confirmed = await requestConfirmation({
+      title: "Delete Blocking Group Permanently",
       message: `Delete this blocking group permanently? This will remove ${groupModalSlots.length} record(s) and cannot be undone.`,
       confirmLabel: "Delete Permanently",
       cancelLabel: "Cancel",
@@ -741,7 +1068,7 @@ export function BlockedSlotManager() {
     setIsGroupDeleting(false);
   }
 
-  async function handleSessionAction(slot: BlockedSlot, action: "begin" | "end"): Promise<void> {
+  async function handleSessionAction(slot: BlockedSlot, action: "begin" | "pause" | "resume" | "end"): Promise<void> {
     setError(null);
     setSuccessMessage(null);
     setSessionActionId(slot._id);
@@ -791,20 +1118,42 @@ export function BlockedSlotManager() {
             return {
               ...merged,
               sessionStartedAt: merged.sessionStartedAt ?? optimisticNow,
+              sessionPausedAt: null,
               sessionEndedAt: null,
               actualDurationHours: null,
               chargedAmount: null,
             };
           }
 
+          if (action === "pause") {
+            return {
+              ...merged,
+              sessionPausedAt: merged.sessionPausedAt ?? optimisticNow,
+            };
+          }
+
+          if (action === "resume") {
+            return {
+              ...merged,
+              sessionPausedAt: null,
+            };
+          }
+
           return {
             ...merged,
+            sessionPausedAt: null,
             sessionEndedAt: merged.sessionEndedAt ?? optimisticNow,
           };
         })
       );
 
-      setSuccessMessage(action === "begin" ? "Session started." : "Session ended and payment calculated.");
+      const successByAction: Record<"begin" | "pause" | "resume" | "end", string> = {
+        begin: "Session started.",
+        pause: "Session paused.",
+        resume: "Session resumed.",
+        end: "Session stopped. Payment recorded. A fresh record is now ready to begin.",
+      };
+      setSuccessMessage(successByAction[action]);
       await loadData();
     } catch (sessionError) {
       setError(sessionError instanceof Error ? sessionError.message : "Failed to update session");
@@ -813,7 +1162,7 @@ export function BlockedSlotManager() {
     }
   }
 
-  async function handleGroupSessionAction(action: "begin" | "end"): Promise<void> {
+  async function handleGroupSessionAction(action: "begin" | "pause" | "resume" | "end"): Promise<void> {
     setError(null);
     setSuccessMessage(null);
     setGroupSessionAction(action);
@@ -826,7 +1175,11 @@ export function BlockedSlotManager() {
             (slot) =>
               (slot.bookingDate < today || currentTime >= slot.startTime)
           )
-        : groupModalMonitorSlots.filter((slot) => !!slot.sessionStartedAt && !slot.sessionEndedAt);
+        : action === "pause"
+          ? groupModalMonitorSlots.filter((slot) => !!slot.sessionStartedAt && !slot.sessionPausedAt && !slot.sessionEndedAt)
+          : action === "resume"
+            ? groupModalMonitorSlots.filter((slot) => !!slot.sessionStartedAt && !!slot.sessionPausedAt && !slot.sessionEndedAt)
+            : groupModalMonitorSlots.filter((slot) => !!slot.sessionStartedAt && !slot.sessionEndedAt);
 
     if (targets.length === 0) {
       setGroupSessionAction(null);
@@ -836,7 +1189,6 @@ export function BlockedSlotManager() {
             .filter((slot) => slot.bookingDate === today && currentTime < slot.startTime)
             .map((slot) => slot.startTime)
             .sort()[0];
-
           setPopupMessage(
             nextTodayStart
               ? `Cannot begin yet. Earliest configured start time is ${formatTime12h(nextTodayStart)}.`
@@ -844,23 +1196,45 @@ export function BlockedSlotManager() {
           );
           return;
         }
-
         if (groupModalMonitorSlots.some((slot) => !slot.sessionStartedAt && slot.bookingDate > today)) {
           setPopupMessage("Cannot begin yet. This group is scheduled for a future date.");
           return;
         }
       }
-      setError(action === "begin" ? "No eligible records to begin." : "No running records to stop.");
+      const emptyMessageByAction: Record<"begin" | "pause" | "resume" | "end", string> = {
+        begin: "No eligible records to begin.",
+        pause: "No running records to pause.",
+        resume: "No paused records to resume.",
+        end: "No running records to stop.",
+      };
+      setError(emptyMessageByAction[action]);
       return;
     }
 
-    const actionLabel = action === "begin" ? "start" : "stop";
+    const actionLabelByAction: Record<"begin" | "pause" | "resume" | "end", string> = {
+      begin: "start",
+      pause: "pause",
+      resume: "resume",
+      end: "stop",
+    };
+    const titleByAction: Record<"begin" | "pause" | "resume" | "end", string> = {
+      begin: "Start Group Sessions",
+      pause: "Pause Group Sessions",
+      resume: "Resume Group Sessions",
+      end: "Stop Group Sessions",
+    };
+    const confirmByAction: Record<"begin" | "pause" | "resume" | "end", string> = {
+      begin: "Start Sessions",
+      pause: "Pause Sessions",
+      resume: "Resume Sessions",
+      end: "Stop Sessions",
+    };
     const confirmed = await requestConfirmation({
-      title: `${action === "begin" ? "Start" : "Stop"} Group Sessions`,
-      message: `This will ${actionLabel} ${targets.length} record(s) for this group. Continue?`,
-      confirmLabel: action === "begin" ? "Start Sessions" : "Stop Sessions",
+      title: titleByAction[action],
+      message: `This will ${actionLabelByAction[action]} ${targets.length} record(s) for this group. Continue?`,
+      confirmLabel: confirmByAction[action],
       cancelLabel: "Cancel",
-      danger: action !== "begin",
+      danger: action === "end",
     });
 
     if (!confirmed) {
@@ -901,6 +1275,22 @@ export function BlockedSlotManager() {
           continue;
         }
 
+        if (action === "pause" && !updatedSlot?.sessionPausedAt) {
+          failureCount += 1;
+          if (!firstFailureReason) {
+            firstFailureReason = "Pause request succeeded but session did not pause on server.";
+          }
+          continue;
+        }
+
+        if (action === "resume" && updatedSlot?.sessionPausedAt) {
+          failureCount += 1;
+          if (!firstFailureReason) {
+            firstFailureReason = "Resume request succeeded but session remained paused on server.";
+          }
+          continue;
+        }
+
         if (action === "end" && !updatedSlot?.sessionEndedAt) {
           failureCount += 1;
           if (!firstFailureReason) {
@@ -926,14 +1316,30 @@ export function BlockedSlotManager() {
               return {
                 ...merged,
                 sessionStartedAt: merged.sessionStartedAt ?? optimisticNow,
+                sessionPausedAt: null,
                 sessionEndedAt: null,
                 actualDurationHours: null,
                 chargedAmount: null,
               };
             }
 
+            if (action === "pause") {
+              return {
+                ...merged,
+                sessionPausedAt: merged.sessionPausedAt ?? optimisticNow,
+              };
+            }
+
+            if (action === "resume") {
+              return {
+                ...merged,
+                sessionPausedAt: null,
+              };
+            }
+
             return {
               ...merged,
+              sessionPausedAt: null,
               sessionEndedAt: merged.sessionEndedAt ?? optimisticNow,
             };
           })
@@ -951,14 +1357,26 @@ export function BlockedSlotManager() {
     await loadData();
 
     if (successCount > 0 && failureCount > 0) {
+      const pastVerbByAction: Record<"begin" | "pause" | "resume" | "end", string> = {
+        begin: "Started",
+        pause: "Paused",
+        resume: "Resumed",
+        end: "Stopped",
+      };
       setSuccessMessage(
-        `${action === "begin" ? "Started" : "Stopped"} ${successCount} record(s). ${failureCount} failed.`
+        `${pastVerbByAction[action]} ${successCount} record(s). ${failureCount} failed.`
       );
       if (firstFailureReason) {
         setError(firstFailureReason);
       }
     } else if (successCount > 0) {
-      setSuccessMessage(`${action === "begin" ? "Started" : "Stopped"} ${successCount} record(s).`);
+      const pastVerbByAction: Record<"begin" | "pause" | "resume" | "end", string> = {
+        begin: "Started",
+        pause: "Paused",
+        resume: "Resumed",
+        end: "Stopped",
+      };
+      setSuccessMessage(`${pastVerbByAction[action]} ${successCount} record(s).`);
     } else {
       setError(firstFailureReason ?? `Unable to ${action} records right now.`);
     }
@@ -1020,7 +1438,7 @@ export function BlockedSlotManager() {
       return;
     }
 
-    const targets = blockedSlots.filter((slot) => blockedGroupKey(slot) === groupEditKey);
+    const targets = activeBlockedSlots.filter((slot) => blockedGroupKey(slot) === groupEditKey);
 
     if (targets.length === 0) {
       setGroupEditError("No records found for this group.");
@@ -1040,19 +1458,7 @@ export function BlockedSlotManager() {
     for (const target of targets) {
       try {
         if (!selectedCourtIdSet.has(target.courtId)) {
-          const deleteResponse = await fetch(`/api/admin/blocked-slots/${target._id}`, {
-            method: "DELETE",
-          });
-
-          if (!deleteResponse.ok) {
-            failed += 1;
-            if (!firstFailureMessage) {
-              const body = (await deleteResponse.json().catch(() => null)) as
-                | { error?: { message?: string } }
-                | null;
-              firstFailureMessage = body?.error?.message ?? "Failed to remove one or more unselected courts";
-            }
-          }
+          await archiveBlockedSlotById(target._id);
 
           continue;
         }
@@ -1368,32 +1774,56 @@ export function BlockedSlotManager() {
           <div className="w-full max-w-6xl rounded-xl bg-[#1F2937] p-5 shadow-2xl">
             <div className="mb-3 flex items-start justify-between gap-3">
               <div>
-                <h3 className="text-lg font-semibold text-gray-100">Group Session Records</h3>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-lg font-semibold text-gray-100">Group Session Records</h3>
+                  {groupModalSource === "archived" ? (
+                    <span className="inline-flex items-center rounded border border-amber-600/50 bg-amber-600/15 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-amber-300">
+                      Archived
+                    </span>
+                  ) : null}
+                </div>
                 <p className="mt-1 text-sm text-gray-300">
                   {groupModalIdentity?.groupName} • {groupModalIdentity?.groupRepresentative}
                 </p>
               </div>
               <div className="flex flex-col items-end gap-2">
                 <div className="flex items-center gap-2">
+                  {groupModalSource === "active" ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={handleOpenGroupEdit}
+                        disabled={isGroupDeleting}
+                        className="rounded border border-amber-600/50 bg-amber-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-amber-700"
+                      >
+                        Edit Blocking Details
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleArchiveGroup()}
+                        disabled={isGroupDeleting}
+                        className="rounded border border-amber-600/50 bg-amber-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-60"
+                      >
+                        {isGroupDeleting ? "Archiving..." : "Archive Group"}
+                      </button>
+                      {isCurrentUserAdmin ? (
+                        <button
+                          type="button"
+                          onClick={() => void handleDeleteGroupPermanently()}
+                          disabled={isGroupDeleting}
+                          className="rounded border border-red-600/50 bg-red-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-60"
+                        >
+                          {isGroupDeleting ? "Deleting..." : "Delete Permanently"}
+                        </button>
+                      ) : null}
+                    </>
+                  ) : null}
                   <button
                     type="button"
-                    onClick={handleOpenGroupEdit}
-                    disabled={isGroupDeleting}
-                    className="rounded border border-amber-600/50 bg-amber-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-amber-700"
-                  >
-                    Edit Blocking Details
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void handleDeleteGroup()}
-                    disabled={isGroupDeleting}
-                    className="rounded border border-red-600/50 bg-red-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-60"
-                  >
-                    {isGroupDeleting ? "Deleting..." : "Delete Permanently"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setGroupModalKey(null)}
+                    onClick={() => {
+                      setGroupModalKey(null);
+                      setGroupModalSource("active");
+                    }}
                     disabled={isGroupDeleting}
                     className="rounded border border-gray-600 bg-[#111827] px-2.5 py-1 text-xs font-semibold text-gray-300 hover:border-gray-500"
                   >
@@ -1467,15 +1897,31 @@ export function BlockedSlotManager() {
                 <div className="mb-3 flex flex-wrap items-center gap-2">
                   <button
                     type="button"
-                    disabled={groupSessionAction !== null}
+                    disabled={groupModalSource === "archived" || groupSessionAction !== null}
                     onClick={() => void handleGroupSessionAction("begin")}
                     className="px-2.5 py-1 rounded bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 disabled:opacity-60"
                   >
-                    {groupSessionAction === "begin" ? "Starting..." : `Begin All (${groupBeginEligibleCount})`}
+                    {groupSessionAction === "begin" ? "Starting..." : `Start All (${groupBeginEligibleCount})`}
                   </button>
                   <button
                     type="button"
-                    disabled={groupSessionAction !== null || groupEndEligibleCount === 0}
+                    disabled={groupModalSource === "archived" || groupSessionAction !== null || (groupPauseEligibleCount === 0 && groupResumeEligibleCount === 0)}
+                    onClick={() => void handleGroupSessionAction(groupResumeEligibleCount > 0 ? "resume" : "pause")}
+                    className={`px-2.5 py-1 rounded text-white text-xs font-semibold disabled:opacity-60 ${
+                      groupResumeEligibleCount > 0 ? "bg-violet-600 hover:bg-violet-700" : "bg-amber-600 hover:bg-amber-700"
+                    }`}
+                  >
+                    {groupSessionAction === "pause"
+                      ? "Pausing..."
+                      : groupSessionAction === "resume"
+                        ? "Resuming..."
+                        : groupResumeEligibleCount > 0
+                          ? `Resume All (${groupResumeEligibleCount})`
+                          : `Pause All (${groupPauseEligibleCount})`}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={groupModalSource === "archived" || groupSessionAction !== null || groupEndEligibleCount === 0}
                     onClick={() => void handleGroupSessionAction("end")}
                     className="px-2.5 py-1 rounded bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700 disabled:opacity-60"
                   >
@@ -1512,7 +1958,9 @@ export function BlockedSlotManager() {
                                   ? "Not started"
                                   : blockedSlotSessionLabel(slot, today) === "running"
                                     ? `Running (${formatElapsedDuration(nowTick - new Date(slot.sessionStartedAt as string).getTime())})`
-                                    : "Closed"}
+                                    : blockedSlotSessionLabel(slot, today) === "paused"
+                                      ? "Paused"
+                                      : "Closed"}
                             </td>
                             <td className="px-2 py-1.5 text-right text-emerald-300 font-semibold wrap-break-word">
                               {typeof slot.chargedAmount === "number"
@@ -1521,14 +1969,25 @@ export function BlockedSlotManager() {
                             </td>
                             <td className="px-2 py-1.5">
                               <div className="flex flex-wrap items-center gap-1.5">
-                                <span className="text-[11px] text-gray-400">Use Begin All / Stop All</span>
+                                <span className="text-[11px] text-gray-400">Use Begin/Pause/Resume/Stop All</span>
+
+                                {slot.sessionStartedAt && !slot.sessionEndedAt ? (
+                                  <button
+                                    type="button"
+                                    disabled={sessionActionId === slot._id}
+                                    onClick={() => void handleSessionAction(slot, "end")}
+                                    className="px-2 py-0.5 rounded bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700 disabled:opacity-60"
+                                  >
+                                    {sessionActionId === slot._id ? "Stopping..." : "Stop"}
+                                  </button>
+                                ) : null}
 
                                 <button
                                   type="button"
                                   onClick={() => void handleDeleteBlock(slot._id)}
-                                  className="px-2 py-0.5 rounded bg-red-600 text-white text-sm font-semibold hover:bg-red-700"
+                                  className="px-2 py-0.5 rounded bg-amber-600 text-white text-sm font-semibold hover:bg-amber-700"
                                 >
-                                  Remove
+                                  Archive
                                 </button>
                               </div>
                             </td>
@@ -1545,11 +2004,85 @@ export function BlockedSlotManager() {
       ) : null}
 
       <div className="text-lg font-semibold text-gray-200 mb-3 border-b border-gray-700 pb-2">
-        Booking Blocks
-        <p className="mt-1 text-sm text-slate-500 font-normal">
-          Prevent selected courts from being booked at specific times.
-        </p>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            Booking Blocks
+            <p className="mt-1 text-sm text-slate-500 font-normal">
+              Prevent selected courts from being booked at specific times.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowReminderModal(true)}
+            className="relative inline-flex items-center justify-center rounded-lg border border-amber-500/50 bg-amber-500/10 px-3 py-1.5 text-amber-200 hover:bg-amber-500/20"
+            aria-label="Open recurrence reminders"
+            title="Open recurrence reminders"
+          >
+            <span className="text-sm leading-none">🔔</span>
+            <span className="absolute -right-1.5 -top-1.5 rounded-full bg-amber-500 px-1.5 py-0.5 text-[11px] font-bold text-black">
+              {visibleReminderRows.length}
+            </span>
+          </button>
+        </div>
       </div>
+
+      {showReminderModal ? (
+        <div className="fixed inset-0 z-70 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-2xl rounded-xl border border-amber-600/40 bg-[#1F2937] p-5 shadow-xl">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-amber-300">Recurrence Reminders</p>
+                <p className="text-xs text-gray-400">Today&apos;s blocking reminders that need receptionist attention.</p>
+              </div>
+              <div className="flex items-center gap-2">
+                {visibleReminderRows.length > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => void markReminderRowsSeen(visibleReminderRows)}
+                    className="rounded border border-amber-600/60 bg-amber-600/20 px-2.5 py-1 text-xs font-semibold text-amber-200 hover:bg-amber-600/30"
+                  >
+                    Mark All Seen
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => setShowReminderModal(false)}
+                  className="rounded border border-gray-600 bg-[#111827] px-2.5 py-1 text-xs font-semibold text-gray-300 hover:border-gray-500"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+            {visibleReminderRows.length === 0 ? (
+              <p className="text-sm text-gray-400">No reminder notifications right now.</p>
+            ) : (
+              <div className="max-h-[55vh] space-y-2 overflow-y-auto pr-1">
+                {visibleReminderRows.map((row) => (
+                  <div
+                    key={row.key}
+                    className="flex items-start gap-3 rounded-xl border border-amber-600/40 bg-amber-900/20 px-4 py-3 text-sm text-amber-200 shadow"
+                  >
+                    <span className="mt-0.5 text-amber-300 text-base">🏸</span>
+                    <div className="flex-1">
+                      <p className="font-medium">Reminder: {row.message}</p>
+                      <p className="mt-1 text-[11px] font-semibold uppercase tracking-wide text-amber-300">Status: Unseen</p>
+                    </div>
+                    <button
+                      type="button"
+                      className="ml-2 shrink-0 text-amber-400 hover:text-amber-200 text-base leading-none"
+                      onClick={() => void markReminderRowsSeen([row])}
+                      aria-label="Mark seen"
+                      title="Mark as seen"
+                    >
+                      ✓
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      ) : null}
 
       <form
         onSubmit={handleCreateBlock}
@@ -1559,47 +2092,7 @@ export function BlockedSlotManager() {
           <div className="md:col-span-5 rounded border border-cyan-700/40 bg-cyan-950/15 px-3 py-2 text-xs text-cyan-100">
             Creating <span className="font-semibold">{bookingDates.length * form.courtIds.length}</span> record(s)
             ({bookingDates.length} date{bookingDates.length !== 1 ? "s" : ""} x {form.courtIds.length} court{form.courtIds.length !== 1 ? "s" : ""}).
-            <span className="ml-1 text-cyan-200/90">This is recurring or multi-court, not a loop.</span>
-          </div>
-        ) : null}
-
-        {form.mode !== "daily" ? (
-          <div className="md:col-span-5 rounded border border-slate-300 bg-[#1F2937] p-2">
-            <span className="mb-2 block text-sm font-medium text-gray-200">Weekdays to block (optional)</span>
-            <p className="mb-2 text-xs text-gray-400">
-              Leave all unchecked to include every day in the selected month/year.
-            </p>
-            <div className="grid grid-cols-2 gap-1 sm:grid-cols-4 lg:grid-cols-7">
-              {[
-                { value: 0, label: "Sun" },
-                { value: 1, label: "Mon" },
-                { value: 2, label: "Tue" },
-                { value: 3, label: "Wed" },
-                { value: 4, label: "Thu" },
-                { value: 5, label: "Fri" },
-                { value: 6, label: "Sat" },
-              ].map((weekday) => {
-                const checked = form.selectedWeekdays.includes(weekday.value);
-                return (
-                  <label key={`weekday-${weekday.value}`} className="flex items-center gap-2 rounded border border-gray-700 px-2 py-1 text-xs text-gray-200">
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      onChange={(e) => {
-                        const isChecked = e.target.checked;
-                        setForm((prev) => ({
-                          ...prev,
-                          selectedWeekdays: isChecked
-                            ? Array.from(new Set([...prev.selectedWeekdays, weekday.value])).sort((a, b) => a - b)
-                            : prev.selectedWeekdays.filter((day) => day !== weekday.value),
-                        }));
-                      }}
-                    />
-                    <span>{weekday.label}</span>
-                  </label>
-                );
-              })}
-            </div>
+            <span className="ml-1 text-cyan-200/90">This is a multi-court batch create.</span>
           </div>
         ) : null}
 
@@ -1648,56 +2141,28 @@ export function BlockedSlotManager() {
           </div>
         </div>
 
-        <select
-          value={form.mode}
-          onChange={(e) =>
-            setForm((prev) => ({
-              ...prev,
-              mode: e.target.value as NewBlockForm["mode"],
-            }))
-          }
+        <input
+          type="date"
+          value={form.bookingDate}
+          onChange={(e) => setForm((prev) => ({ ...prev, bookingDate: e.target.value }))}
           className="rounded border border-gray-600 bg-[#1F2937] text-gray-200 px-2 py-2 text-sm"
           required
-        >
-          <option value="daily">Daily (single date)</option>
-          <option value="monthly">Monthly recurring (all remaining days in month)</option>
-          <option value="yearly">Yearly recurring (all remaining days in year)</option>
-        </select>
+        />
 
-        {form.mode === "daily" ? (
-          <input
-            type="date"
-            value={form.bookingDate}
-            onChange={(e) => setForm((prev) => ({ ...prev, bookingDate: e.target.value }))}
-            className="rounded border border-gray-600 bg-[#1F2937] text-gray-200 px-2 py-2 text-sm"
-            required
-          />
-        ) : form.mode === "monthly" ? (
-          <input
-            type="month"
-            value={form.bookingMonth}
-            onChange={(e) => setForm((prev) => ({ ...prev, bookingMonth: e.target.value }))}
-            className="rounded border border-gray-600 bg-[#1F2937] text-gray-200 px-2 py-2 text-sm"
-            required
-          />
-        ) : (
-          <input
-            type="number"
-            value={form.bookingYear}
-            min={new Date().getFullYear()}
-            max={new Date().getFullYear() + 10}
-            onChange={(e) => setForm((prev) => ({ ...prev, bookingYear: e.target.value }))}
-            className="rounded border border-gray-600 bg-[#1F2937] text-gray-200 px-2 py-2 text-sm"
-            placeholder="Year"
-            required
-          />
-        )}
+        <input
+          type="date"
+          value={form.recurrenceUntilDate}
+          onChange={(e) => setForm((prev) => ({ ...prev, recurrenceUntilDate: e.target.value }))}
+          className="rounded border border-gray-600 bg-[#1F2937] text-gray-200 px-2 py-2 text-sm"
+          min={form.bookingDate}
+          placeholder="Recurs until (optional)"
+        />
 
         <input
           type="time"
           value={form.startTime}
           onChange={(e) => setForm((prev) => ({ ...prev, startTime: e.target.value }))}
-          min={bookingDates.includes(today) ? nowTime : undefined}
+          min={bookingDates.includes(today) ? currentTimeHHMM() : undefined}
           className="rounded border border-gray-600 bg-[#1F2937] text-gray-200 px-2 py-2 text-sm"
           required
         />
@@ -1739,6 +2204,42 @@ export function BlockedSlotManager() {
           maxLength={200}
         />
 
+        <div className="md:col-span-5 rounded border border-gray-700 bg-[#1F2937] px-3 py-2">
+          <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-300">Recur On Weekdays (Optional)</div>
+          <p className="mb-2 text-[11px] text-gray-500">Choose specific weekdays. Leave empty for daily recurrence until the recurrence date.</p>
+          <div className="grid grid-cols-2 gap-1 sm:grid-cols-4 md:grid-cols-7">
+            {[
+              { value: 0, label: "Sun" },
+              { value: 1, label: "Mon" },
+              { value: 2, label: "Tue" },
+              { value: 3, label: "Wed" },
+              { value: 4, label: "Thu" },
+              { value: 5, label: "Fri" },
+              { value: 6, label: "Sat" },
+            ].map((weekday) => {
+              const checked = form.recurrenceWeekdays.includes(weekday.value);
+              return (
+                <label key={`create-weekday-${weekday.value}`} className="flex items-center gap-2 rounded border border-gray-700 px-2 py-1 text-xs text-gray-200">
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={(e) => {
+                      const isChecked = e.target.checked;
+                      setForm((prev) => ({
+                        ...prev,
+                        recurrenceWeekdays: isChecked
+                          ? Array.from(new Set([...prev.recurrenceWeekdays, weekday.value])).sort((a, b) => a - b)
+                          : prev.recurrenceWeekdays.filter((day) => day !== weekday.value),
+                      }));
+                    }}
+                  />
+                  <span>{weekday.label}</span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
+
         <button
           type="submit"
           disabled={isSaving || isLoading}
@@ -1764,7 +2265,7 @@ export function BlockedSlotManager() {
         <div className="text-xs text-gray-400">
           Showing {groupedBlockedRows.length} group record{groupedBlockedRows.length !== 1 ? "s" : ""} ({filteredBlockedSlots.length} session record{filteredBlockedSlots.length !== 1 ? "s" : ""})
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <label className="text-xs text-gray-400">Session Day:</label>
           <select
             value={sessionRecordDate}
@@ -1778,6 +2279,26 @@ export function BlockedSlotManager() {
               </option>
             ))}
           </select>
+          <label className="ml-2 text-xs text-gray-400">Reminder Status:</label>
+          <select
+            value={reminderStatusFilter}
+            onChange={(e) => setReminderStatusFilter(e.target.value as "all" | "unseen" | "seen")}
+            className="rounded border border-gray-600 bg-[#1F2937] text-gray-200 px-2 py-1 text-sm"
+          >
+            <option value="all">All</option>
+            <option value="unseen">Unseen</option>
+            <option value="seen">Seen</option>
+          </select>
+          {isCurrentUserAdmin ? (
+            <label className="ml-2 inline-flex items-center gap-2 text-xs text-gray-400">
+              <input
+                type="checkbox"
+                checked={showArchived}
+                onChange={(e) => setShowArchived(e.target.checked)}
+              />
+              Show Archived Section
+            </label>
+          ) : null}
         </div>
       </div>
 
@@ -1791,8 +2312,8 @@ export function BlockedSlotManager() {
           <div className="text-sm font-semibold text-cyan-100">Click a group in table to view modal</div>
         </div>
         <div className="rounded border border-cyan-700/40 bg-cyan-950/15 px-3 py-2">
-          <div className="text-[11px] uppercase tracking-wide text-cyan-200/80">Closed Sessions</div>
-          <div className="text-sm font-semibold text-cyan-100">{completedFilteredSessions.length}</div>
+          <div className="text-[11px] uppercase tracking-wide text-cyan-200/80">Reminder Filter</div>
+          <div className="text-sm font-semibold text-cyan-100 capitalize">{reminderStatusFilter}</div>
         </div>
       </div>
 
@@ -1805,6 +2326,7 @@ export function BlockedSlotManager() {
               <th className="px-1.5 py-1.5 font-semibold text-left">Representative</th>
               <th className="px-1.5 py-1.5 font-semibold text-left">Records</th>
               <th className="px-1.5 py-1.5 font-semibold text-left">Courts</th>
+              <th className="px-1.5 py-1.5 font-semibold text-left">Reminder</th>
               <th className="px-1.5 py-1.5 font-semibold text-left">Session</th>
               <th className="px-1.5 py-1.5 font-semibold text-right">Payment</th>
               <th className="px-1.5 py-1.5 font-semibold text-left">Latest Created</th>
@@ -1813,7 +2335,7 @@ export function BlockedSlotManager() {
           <tbody>
             {!isLoading && groupedBlockedRows.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-2 py-6 text-center italic text-slate-500">
+                <td colSpan={8} className="px-2 py-6 text-center italic text-slate-500">
                   No blocked group records found for the selected day.
                 </td>
               </tr>
@@ -1823,7 +2345,10 @@ export function BlockedSlotManager() {
                 <td className="px-1.5 py-1.5 wrap-break-word">
                   <button
                     type="button"
-                    onClick={() => setGroupModalKey(group.groupKey)}
+                    onClick={() => {
+                      setGroupModalSource("active");
+                      setGroupModalKey(group.groupKey);
+                    }}
                     className="text-sm font-semibold text-cyan-300 underline-offset-2 hover:underline"
                     title="Open group records"
                   >
@@ -1833,6 +2358,17 @@ export function BlockedSlotManager() {
                 <td className="px-1.5 py-1.5 text-gray-100 wrap-break-word">{group.groupRepresentative}</td>
                 <td className="px-1.5 py-1.5 text-gray-100 wrap-break-word">{group.slots.length}</td>
                 <td className="px-1.5 py-1.5 text-gray-100 wrap-break-word">{group.courts.join(", ")}</td>
+                <td className="px-1.5 py-1.5 text-gray-100 wrap-break-word">
+                  {group.unseenReminderCount > 0 ? (
+                    <span className="inline-flex items-center rounded border border-amber-600/50 bg-amber-600/15 px-2 py-0.5 text-[11px] font-semibold text-amber-300">
+                      Unseen ({group.unseenReminderCount})
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center rounded border border-emerald-600/50 bg-emerald-600/15 px-2 py-0.5 text-[11px] font-semibold text-emerald-300">
+                      Seen ({group.seenReminderCount})
+                    </span>
+                  )}
+                </td>
                 <td className="px-1.5 py-1.5 text-gray-100 wrap-break-word">
                   <div className="text-xs text-gray-300">
                     {group.runningCount > 0 ? <div className="text-emerald-400">Running: {group.runningCount}</div> : null}
@@ -1857,6 +2393,99 @@ export function BlockedSlotManager() {
           </tbody>
         </table>
       </div>
+
+      {isCurrentUserAdmin && showArchived ? (
+        <section className="mt-5 rounded-xl border border-gray-700 bg-[#111827] p-3">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h4 className="text-sm font-semibold text-gray-100">Archived Blocking Records</h4>
+              <p className="text-xs text-gray-400">Admin-only archive bin for restore or permanent delete.</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                disabled={filteredArchivedSlots.length === 0 || archivedBulkAction !== null}
+                onClick={() => void handleRestoreAllArchived()}
+                className="rounded border border-emerald-600/60 bg-emerald-600/20 px-2.5 py-1 text-xs font-semibold text-emerald-300 hover:bg-emerald-600/30 disabled:opacity-50"
+              >
+                {archivedBulkAction === "restore" ? "Restoring..." : "Restore All"}
+              </button>
+              <button
+                type="button"
+                disabled={filteredArchivedSlots.length === 0 || archivedBulkAction !== null}
+                onClick={() => void handleDeleteAllArchivedPermanently()}
+                className="rounded border border-red-600/60 bg-red-600/20 px-2.5 py-1 text-xs font-semibold text-red-300 hover:bg-red-600/30 disabled:opacity-50"
+              >
+                {archivedBulkAction === "delete" ? "Deleting..." : "Delete All Permanently"}
+              </button>
+            </div>
+          </div>
+
+          {filteredArchivedSlots.length === 0 ? (
+            <p className="text-sm text-gray-400">No archived records for the selected day.</p>
+          ) : (
+            <div className="overflow-x-hidden">
+              <table className="w-full border-collapse bg-[#1F2937] rounded-xl shadow text-xs sm:text-sm table-fixed">
+                <thead>
+                  <tr className="bg-[#0B0F1A] text-gray-400">
+                    <th className="px-1.5 py-1.5 font-semibold text-left">Court</th>
+                    <th className="px-1.5 py-1.5 font-semibold text-left">Group</th>
+                    <th className="px-1.5 py-1.5 font-semibold text-left">Date</th>
+                    <th className="px-1.5 py-1.5 font-semibold text-left">Time</th>
+                    <th className="px-1.5 py-1.5 font-semibold text-left">Archived At</th>
+                    <th className="px-1.5 py-1.5 font-semibold text-left">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredArchivedSlots
+                    .slice()
+                    .sort((left, right) => new Date(right.archivedAt ?? right.updatedAt ?? right.createdAt).getTime() - new Date(left.archivedAt ?? left.updatedAt ?? left.createdAt).getTime())
+                    .map((slot) => (
+                      <tr key={`archived-${slot._id}`} className="border-b border-gray-700 last:border-b-0">
+                        <td className="px-1.5 py-1.5 text-gray-100 wrap-break-word">{courtNameById[slot.courtId] ?? slot.courtId}</td>
+                        <td className="px-1.5 py-1.5 text-gray-100 wrap-break-word">{normalizedGroupName(slot)}</td>
+                        <td className="px-1.5 py-1.5 text-gray-100 wrap-break-word">{slot.bookingDate}</td>
+                        <td className="px-1.5 py-1.5 text-gray-300 wrap-break-word">{formatTime12h(slot.startTime)} - {formatTime12h(slot.endTime)}</td>
+                        <td className="px-1.5 py-1.5 text-gray-300 wrap-break-word">{slot.archivedAt ? new Date(slot.archivedAt).toLocaleString() : "-"}</td>
+                        <td className="px-1.5 py-1.5">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <button
+                              type="button"
+                              disabled={archivedActionId === slot._id || archivedBulkAction !== null}
+                              onClick={() => {
+                                setGroupModalSource("archived");
+                                setGroupModalKey(blockedGroupKey(slot));
+                              }}
+                              className="px-2 py-0.5 rounded bg-cyan-600 text-white text-xs font-semibold hover:bg-cyan-700 disabled:opacity-50"
+                            >
+                              Open
+                            </button>
+                            <button
+                              type="button"
+                              disabled={archivedActionId === slot._id || archivedBulkAction !== null}
+                              onClick={() => void handleRestoreArchivedSlot(slot._id)}
+                              className="px-2 py-0.5 rounded bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 disabled:opacity-50"
+                            >
+                              {archivedActionId === slot._id ? "Working..." : "Restore"}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={archivedActionId === slot._id || archivedBulkAction !== null}
+                              onClick={() => void handleDeleteArchivedSlotPermanently(slot._id)}
+                              className="px-2 py-0.5 rounded bg-red-600 text-white text-xs font-semibold hover:bg-red-700 disabled:opacity-50"
+                            >
+                              {archivedActionId === slot._id ? "Working..." : "Delete Permanently"}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      ) : null}
     </div>
   );
 }

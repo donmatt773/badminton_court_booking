@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { getPusherClient } from "@/lib/client/pusher-client";
+import { REALTIME_CHANNELS, REALTIME_EVENTS } from "@/lib/shared/realtime-events";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
@@ -26,6 +28,8 @@ type Court = {
   surfaceType: "wooden" | "rubber";
   status: "active" | "inactive" | "maintenance";
   price: number;
+  weekdayRate?: number | null;
+  weekendRate?: number | null;
 };
 
 type Booking = {
@@ -129,7 +133,8 @@ type EditModalState =
         name: string;
         surfaceType: "wooden" | "rubber";
         status: "active" | "inactive" | "maintenance";
-        price: number;
+        weekdayRate: number;
+        weekendRate: number;
       };
     };
 
@@ -306,6 +311,11 @@ function hoursFromTimes(start: string, end: string): number {
   const [sh] = start.split(":").map(Number);
   const [eh] = end.split(":").map(Number);
   return Number.isNaN(sh) || Number.isNaN(eh) ? 0 : Math.max(0, eh - sh);
+}
+
+function isWeekendDate(bookingDate: string): boolean {
+  const day = new Date(`${bookingDate}T00:00:00`).getDay();
+  return day === 0 || day === 6;
 }
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -608,7 +618,8 @@ export default function AdminPage() {
     name: "",
     surfaceType: "rubber",
     status: "active",
-    price: 0,
+    weekdayRate: 0,
+    weekendRate: 0,
   });
   const [editModal, setEditModal] = useState<EditModalState | null>(null);
   const [editModalError, setEditModalError] = useState<string | null>(null);
@@ -679,8 +690,11 @@ export default function AdminPage() {
           return booking.chargedAmount;
         }
 
-        const courtPrice = courts.find((court) => court._id === booking.courtId)?.price ?? 0;
-        return courtPrice * hoursFromTimes(booking.startTime, booking.endTime);
+        const court = courts.find((item) => item._id === booking.courtId);
+        const weekdayRate = court?.weekdayRate ?? court?.price ?? 0;
+        const weekendRate = court?.weekendRate ?? court?.price ?? 0;
+        const appliedRate = isWeekendDate(booking.bookingDate) ? weekendRate : weekdayRate;
+        return appliedRate * hoursFromTimes(booking.startTime, booking.endTime);
       },
     [courts]
   );
@@ -983,6 +997,22 @@ export default function AdminPage() {
   }, [currentUser]);
 
   useEffect(() => {
+    if (!currentUser) return;
+
+    const pusher = getPusherClient();
+    if (!pusher) return;
+
+    const channel = pusher.subscribe(REALTIME_CHANNELS.blockedSlots);
+    channel.bind(REALTIME_EVENTS.updated, () => {
+      void loadAll();
+    });
+    return () => {
+      channel.unbind(REALTIME_EVENTS.updated);
+      pusher.unsubscribe(REALTIME_CHANNELS.blockedSlots);
+    };
+  }, [currentUser]);
+
+  useEffect(() => {
     if (!currentUser) {
       return;
     }
@@ -1077,6 +1107,8 @@ export default function AdminPage() {
       isActive: /active|inactive/,
       surfaceType: /surface/,
       price: /price|amount|cost/,
+      weekdayRate: /weekday|price|amount|cost/,
+      weekendRate: /weekend|price|amount|cost/,
     };
 
     if (field === "_global") {
@@ -1982,7 +2014,7 @@ export default function AdminPage() {
                       method: "POST",
                       body: JSON.stringify(newCourt),
                     });
-                    setNewCourt({ name: "", surfaceType: "rubber", status: "active", price: 0 });
+                    setNewCourt({ name: "", surfaceType: "rubber", status: "active", weekdayRate: 0, weekendRate: 0 });
                     await loadAll();
                   } catch (err) {
                     setError(err instanceof Error ? err.message : "Create court failed");
@@ -2024,12 +2056,26 @@ export default function AdminPage() {
                   type="number"
                   min={0}
                   step="0.01"
-                  placeholder="Price"
-                  value={newCourt.price}
+                  placeholder="Weekday Rate"
+                  value={newCourt.weekdayRate}
                   onChange={(e) =>
                     setNewCourt((p) => ({
                       ...p,
-                      price: e.target.value === "" ? 0 : Number(e.target.value),
+                      weekdayRate: e.target.value === "" ? 0 : Number(e.target.value),
+                    }))
+                  }
+                />
+                <input
+                  className={styles.input}
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  placeholder="Weekend Rate"
+                  value={newCourt.weekendRate}
+                  onChange={(e) =>
+                    setNewCourt((p) => ({
+                      ...p,
+                      weekendRate: e.target.value === "" ? 0 : Number(e.target.value),
                     }))
                   }
                 />
@@ -2045,7 +2091,8 @@ export default function AdminPage() {
                     <tr>
                       <th>Name</th>
                       <th>Surface Type</th>
-                      <th>Price</th>
+                      <th>Weekday Rate</th>
+                      <th>Weekend Rate</th>
                       <th>Status</th>
                     </tr>
                   </thead>
@@ -2062,7 +2109,8 @@ export default function AdminPage() {
                           </button>
                         </td>
                         <td>{court.surfaceType}</td>
-                        <td>{Number(court.price ?? 0).toFixed(2)}</td>
+                        <td>{Number(court.weekdayRate ?? court.price ?? 0).toFixed(2)}</td>
+                        <td>{Number(court.weekendRate ?? court.price ?? 0).toFixed(2)}</td>
                         <td>
                           <span className={statusClassName(court.status === "active" ? "APPROVED" : "EXPIRED")}>
                             {court.status}
@@ -2692,6 +2740,10 @@ export default function AdminPage() {
 
               {editModal.type === "court" && (
                 <>
+                  <p className="text-[11px] font-semibold uppercase tracking-widest text-cyan-300">
+                    Editing Court: {editModal.values.name || "(Unnamed Court)"}
+                  </p>
+                  <label className="text-[11px] font-semibold uppercase tracking-widest text-gray-500">Court Name</label>
                   <input
                     className={styles.input}
                     placeholder="Name"
@@ -2707,6 +2759,7 @@ export default function AdminPage() {
                   {getEditFieldError("name") && (
                     <p className={styles.fieldErrorText}>{getEditFieldError("name")}</p>
                   )}
+                  <label className="text-[11px] font-semibold uppercase tracking-widest text-gray-500">Surface Type</label>
                   <select
                     className={styles.select}
                     value={editModal.values.surfaceType}
@@ -2730,6 +2783,7 @@ export default function AdminPage() {
                   {getEditFieldError("surfaceType") && (
                     <p className={styles.fieldErrorText}>{getEditFieldError("surfaceType")}</p>
                   )}
+                  <label className="text-[11px] font-semibold uppercase tracking-widest text-gray-500">Court Status</label>
                   <select
                     className={styles.select}
                     value={editModal.values.status}
@@ -2754,13 +2808,14 @@ export default function AdminPage() {
                   {getEditFieldError("status") && (
                     <p className={styles.fieldErrorText}>{getEditFieldError("status")}</p>
                   )}
+                  <label className="text-[11px] font-semibold uppercase tracking-widest text-gray-500">Weekday Rate (per hour)</label>
                   <input
                     className={styles.input}
                     type="number"
                     min={0}
                     step="0.01"
-                    placeholder="Price"
-                    value={editModal.values.price}
+                    placeholder="Weekday Rate"
+                    value={editModal.values.weekdayRate}
                     onChange={(e) =>
                       setEditModal((prev) =>
                         prev && prev.type === "court"
@@ -2768,15 +2823,40 @@ export default function AdminPage() {
                               ...prev,
                               values: {
                                 ...prev.values,
-                                price: e.target.value === "" ? 0 : Number(e.target.value),
+                                weekdayRate: e.target.value === "" ? 0 : Number(e.target.value),
                               },
                             }
                           : prev
                       )
                     }
                   />
-                  {getEditFieldError("price") && (
-                    <p className={styles.fieldErrorText}>{getEditFieldError("price")}</p>
+                  {getEditFieldError("weekdayRate") && (
+                    <p className={styles.fieldErrorText}>{getEditFieldError("weekdayRate")}</p>
+                  )}
+                  <label className="text-[11px] font-semibold uppercase tracking-widest text-gray-500">Weekend Rate (per hour)</label>
+                  <input
+                    className={styles.input}
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    placeholder="Weekend Rate"
+                    value={editModal.values.weekendRate}
+                    onChange={(e) =>
+                      setEditModal((prev) =>
+                        prev && prev.type === "court"
+                          ? {
+                              ...prev,
+                              values: {
+                                ...prev.values,
+                                weekendRate: e.target.value === "" ? 0 : Number(e.target.value),
+                              },
+                            }
+                          : prev
+                      )
+                    }
+                  />
+                  {getEditFieldError("weekendRate") && (
+                    <p className={styles.fieldErrorText}>{getEditFieldError("weekendRate")}</p>
                   )}
                 </>
               )}
@@ -3053,8 +3133,12 @@ export default function AdminPage() {
                 <span className={statusClassName(selectedCourt.status === "active" ? "APPROVED" : "EXPIRED")}>{selectedCourt.status}</span>
               </div>
               <div>
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#6b9e84] mb-0.5">Price</p>
-                <p className="text-gray-200 font-medium">{Number(selectedCourt.price ?? 0).toFixed(2)}</p>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#6b9e84] mb-0.5">Weekday Rate</p>
+                <p className="text-gray-200 font-medium">{Number(selectedCourt.weekdayRate ?? selectedCourt.price ?? 0).toFixed(2)}</p>
+              </div>
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#6b9e84] mb-0.5">Weekend Rate</p>
+                <p className="text-gray-200 font-medium">{Number(selectedCourt.weekendRate ?? selectedCourt.price ?? 0).toFixed(2)}</p>
               </div>
               <div>
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-[#6b9e84] mb-0.5">Court ID</p>
@@ -3063,7 +3147,7 @@ export default function AdminPage() {
             </div>
             <div className={styles.modalActions}>
               <button type="button" className={`${styles.btn} ${styles.btnDanger}`} onClick={() => { setDeleteModal({ entity: "court", id: selectedCourt._id, endpoint: `/api/admin/courts/${selectedCourt._id}`, errorMessage: "Delete court failed" }); setSelectedCourt(null); }}>Delete</button>
-              <button type="button" className={`${styles.btn} ${styles.btnInfo}`} onClick={() => { openEditModal({ type: "court", id: selectedCourt._id, values: { name: selectedCourt.name, surfaceType: selectedCourt.surfaceType, status: selectedCourt.status, price: selectedCourt.price ?? 0 } }); setSelectedCourt(null); }}>Edit</button>
+              <button type="button" className={`${styles.btn} ${styles.btnInfo}`} onClick={() => { openEditModal({ type: "court", id: selectedCourt._id, values: { name: selectedCourt.name, surfaceType: selectedCourt.surfaceType, status: selectedCourt.status, weekdayRate: selectedCourt.weekdayRate ?? selectedCourt.price ?? 0, weekendRate: selectedCourt.weekendRate ?? selectedCourt.price ?? 0 } }); setSelectedCourt(null); }}>Edit</button>
               <button type="button" className={`${styles.btn} ${styles.btnDark}`} onClick={() => setSelectedCourt(null)}>Close</button>
             </div>
           </div>

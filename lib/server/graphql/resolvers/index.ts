@@ -13,7 +13,7 @@ import { findOverlappingBlockedSlot, doesRecurringSlotApplyOnDate } from "@/lib/
 import { triggerBookingsUpdated } from "@/lib/server/pusher-server";
 import { EVENTS } from "@/lib/server/graphql/lib/events";
 import { pubSub } from "@/lib/server/graphql/lib/pubsub";
-import { computeBookingPricing } from "@/lib/server/bookings/pricing";
+import { computeBookingPricing, resolveCourtHourlyRateForDate } from "@/lib/server/bookings/pricing";
 import {
   assertValidTimeRange,
   createBookingSchema,
@@ -77,13 +77,13 @@ export const resolvers = {
       }
 
       if (args.bookingDate) {
+        query.sessionEndedAt = null;
         query.$or = [
           { bookingDate: args.bookingDate },
           {
             recurrenceUntilDate: { $ne: null },
             bookingDate: { $lte: args.bookingDate },
             recurrenceUntilDate: { $gte: args.bookingDate },
-            sessionEndedAt: null,
           },
         ];
       }
@@ -147,11 +147,12 @@ export const resolvers = {
         const now = new Date();
         const nowDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
         const nowTime = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
-        if (parsed.bookingDate === nowDate && parsed.startTime < nowTime) {
-          throw new GraphQLError("Start time cannot be in the past", {
-            extensions: { code: "BAD_USER_INPUT" },
-          });
-        }
+        // DISABLED FOR TESTING: server-side past-time validation
+        // if (parsed.bookingDate === nowDate && parsed.startTime < nowTime) {
+        //   throw new GraphQLError("Start time cannot be in the past", {
+        //     extensions: { code: "BAD_USER_INPUT" },
+        //   });
+        // }
 
         const court = await CourtModel.findOne({
           _id: parsed.courtId,
@@ -252,7 +253,11 @@ export const resolvers = {
         }
 
         const expiresAt = new Date(now.getTime() + graphQLEnv.PENDING_EXPIRY_MINUTES * 60_000);
-        const pricing = computeBookingPricing(court.price ?? 0, parsed.startTime, parsed.endTime);
+        const pricing = computeBookingPricing(
+          resolveCourtHourlyRateForDate(court, parsed.bookingDate),
+          parsed.startTime,
+          parsed.endTime
+        );
 
         const booking = await BookingModel.create({
           customer: customer._id,

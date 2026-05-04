@@ -10,6 +10,8 @@ const createSchema = z.object({
   surfaceType: z.enum(["wooden", "rubber"]),
   status: z.enum(["active", "inactive", "maintenance"]).optional(),
   price: z.coerce.number().min(0).optional(),
+  weekdayRate: z.coerce.number().min(0).optional(),
+  weekendRate: z.coerce.number().min(0).optional(),
 });
 
 export async function GET(): Promise<Response> {
@@ -40,12 +42,16 @@ export async function POST(request: Request): Promise<Response> {
     }
 
     const body = createSchema.parse(await request.json());
+    const normalizedWeekdayRate = body.weekdayRate ?? body.price ?? 0;
+    const normalizedWeekendRate = body.weekendRate ?? body.price ?? normalizedWeekdayRate;
 
     const court = await CourtModel.create({
       name: body.name,
       surfaceType: body.surfaceType,
       status: body.status ?? "active",
-      price: body.price ?? 0,
+      price: body.price ?? normalizedWeekdayRate,
+      weekdayRate: normalizedWeekdayRate,
+      weekendRate: normalizedWeekendRate,
     });
 
     void triggerCourtsUpdated();
